@@ -1,5 +1,6 @@
 """Builds the Expanded Wikipedia dataset."""
 
+import datetime
 import json
 import logging
 from collections import Counter
@@ -25,7 +26,7 @@ class DatasetBuilder:
     Args:
         processed_dir (Path): The directory containing the processed dictionaries
             from running `src/scripts/process.py`.
-        dataset_dir_path (Path): The path to save the expanded dataset.
+        save_dir (Path): The path to save the expanded dataset.
         max_words (int): The maximum number of words in the expanded text.
         max_dataset_length (int, optional): The maximum number of samples in the
             expanded dataset. If None, use all.
@@ -34,7 +35,7 @@ class DatasetBuilder:
     def __init__(
         self,
         processed_dir: Path,
-        dataset_dir_path: Path,
+        save_dir: Path,
         max_words: int,
         max_dataset_length: int | None = None,
     ) -> None:
@@ -43,7 +44,7 @@ class DatasetBuilder:
         self.title_to_text: dict[str, str] = {}
         self.link_to_freq: Counter[str] = Counter()
 
-        self.dataset_dir_path: Path = dataset_dir_path
+        self.save_dir: Path = save_dir
         self.dataset: list[dict[str, Any]] = []
         self.titles_in_dataset: set[str] = set()
         self.link_expansion_count: Counter[str] = Counter()
@@ -62,6 +63,7 @@ class DatasetBuilder:
 
             sample = self._expand(title=title, text=text)
             self.dataset.append(sample)
+            self.dataset_length += 1
 
             if (
                 self.max_dataset_length
@@ -74,14 +76,16 @@ class DatasetBuilder:
 
     def _save_to_disk(self) -> None:
         """Save the dataset and link expansion count to disk."""
-        dataset_dir_path = self.dataset_dir_path.parent / FILE_NAMES["dataset"]
-        dataset_dir_path.parent.mkdir(parents=True, exist_ok=True)
-        with jsonlines.open(dataset_dir_path, mode="w") as writer:
+        date_str = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        save_dir = self.save_dir / date_str
+        save_dir.mkdir(parents=True, exist_ok=True)
+        dataset_path = save_dir / FILE_NAMES["dataset"]
+        dataset_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with jsonlines.open(dataset_path, mode="w") as writer:
             writer.write_all(self.dataset)
 
-        link_expansion_path = (
-            dataset_dir_path.parent / FILE_NAMES["link_expansion_count"]
-        )
+        link_expansion_path = dataset_path.parent / FILE_NAMES["link_expansion_count"]
         with open(link_expansion_path, "w", encoding="utf-8") as f:
             json.dump(dict(self.link_expansion_count), f, ensure_ascii=False, indent=2)
 
@@ -128,18 +132,20 @@ class DatasetBuilder:
         n_words = len(text.split())
         n_links_expanded = 0
         while len(text.split()) < self.max_words:
+            if not links:
+                break
             link = links.pop(0)
             self.link_expansion_count[link] += 1
-
+            n_links_expanded += 1
             link_article = f"\n\n{self.title_to_text[link]}"
             n_words += len(link_article.split())
             text += link_article
 
         sample = {
             "title": title,
-            "expanded_text": text,
             "n_words": n_words,
             "n_links_expanded": n_links_expanded,
+            "expanded_text": text,
         }
         return sample
 

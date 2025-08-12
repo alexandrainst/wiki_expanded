@@ -27,9 +27,9 @@ from wiki_expanded.dataset_builder import DatasetBuilder
     help="Maximum number of words in expanded text.",
 )
 @click.option(
-    "--dataset-dir-path",
-    default="data/final/dataset.jsonl",
-    type=click.Path(file_okay=True, dir_okay=False, path_type=Path),
+    "--save-dir",
+    default="data/final",
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
     help="Path to save the expanded dataset (JSONL).",
 )
 @click.option(
@@ -39,16 +39,13 @@ from wiki_expanded.dataset_builder import DatasetBuilder
     help="Maximum number of samples in the expanded dataset. If None, use all.",
 )
 def main(
-    processed_dir: Path,
-    max_words: int,
-    dataset_dir_path: Path,
-    max_dataset_length: int | None,
+    processed_dir: Path, max_words: int, save_dir: Path, max_dataset_length: int | None
 ) -> None:
     """Build the Expanded Wikipedia dataset."""
     builder = DatasetBuilder(
         processed_dir=processed_dir,
         max_words=max_words,
-        dataset_dir_path=dataset_dir_path,
+        save_dir=save_dir,
         max_dataset_length=max_dataset_length,
     )
     builder.build_expanded_dataset()
