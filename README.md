@@ -19,7 +19,7 @@ make install
 
 ### WikiExtractor
 
-We will use the [WikiExtractor](https://github.com/attardi/wikiextractor) module to extract data from a Wikipedia dump.
+We use the [WikiExtractor](https://github.com/attardi/wikiextractor) module to extract data from a Wikipedia dump.
 
 ```bash
 cd .. && git clone https://github.com/attardi/wikiextractor && \
