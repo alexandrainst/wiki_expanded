@@ -31,7 +31,7 @@ cd wiki_expanded
 1. Extract data from a [Wikipedia dump](https://dumps.wikimedia.org/dawiki/latest/):
 
 ```bash
-python -m ../wikiextractor.WikiExtractor dawiki-latest-pages-articles.xml.bz2 --links --output=data/raw/text
+python -m ../wikiextractor.WikiExtractor dawiki-latest-pages-articles.xml.bz2 --links --json --output=data/raw/text
 ```
 
 2. Process the extracted data to build four json files that will be used to construct the expanded Wikipedia dataset.

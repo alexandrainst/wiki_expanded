@@ -8,7 +8,9 @@ import re
 import urllib.parse
 from collections import Counter
 from pathlib import Path
+from typing import Any
 
+import jsonlines
 from transformers import AutoTokenizer
 
 from .constants import FILE_NAMES
@@ -41,6 +43,12 @@ class Processor:
             Defaults to "google/gemma-7b".
     """
 
+    _LINK_PATTERN = re.compile(r'<a href="([^"]+)">.+?</a>')
+    _YEAR_PATTERN = re.compile(r"^\d{4}$")
+    _YEAR_ERNE_PATTERN = re.compile(r"^\d{4}'erne$")
+    _YEAR_BEFORE_CR_PATTERN = re.compile(r"^\d+\s*f\.Kr\.$")
+    _DATE_PATTERN = re.compile(r"^\d{1,2}\.\s+\w+$")
+
     def __init__(
         self,
         text_dir: Path,
@@ -66,22 +74,27 @@ class Processor:
     def process(self) -> None:
         """Build the five dictionaries."""
         for path in self.text_dir.glob("*/wiki_*"):
-            ids = self._get_all_ids(path=path)
+            articles = self._read_jsonl(path=path)
+            for article in articles:
+                title, text = (
+                    self._make_human_readable(string=article["title"]),
+                    self._make_human_readable(string=article["text"]),
+                )
 
-            for id_ in ids:
-                title, text = self._read_article(path=path, id_=id_)
                 self.articles_processed += 1
                 if not self.articles_processed % 10000:
                     logger.info(f"Processed {self.articles_processed} articles.")
 
                 if not title:
+                    logger.warning(f"No title found for {article['id']} in {path}")
                     continue
 
                 title_cased = title
-                title = title.lower() if self.case_sensitive_titles_and_links else title
+                title = title if self.case_sensitive_titles_and_links else title.lower()
                 text_processed = self._process_text(text=text)
+
                 if title in self.titles_seen:
-                    # There are title duplicates
+                    # There are title duplicates (given case insensitivity)
                     # Prioritize the longer text
                     # See for example https://da.wikipedia.org/wiki/Usa
                     old_text_processed = self.title_to_text[title]
@@ -99,24 +112,24 @@ class Processor:
                     for link in self.title_to_links[title]:
                         self.link_to_freq[link] -= 1
 
+                self.titles_seen.add(title)
+
                 self.original_title[title] = title_cased
 
-                self.titles_seen.add(title)
                 links = self._extract_links(text=text)
+                self.title_to_links[title] = links
                 self.link_to_freq.update(links)
 
-                self.title_to_links[title] = links
                 self.title_to_text[title] = text_processed
 
-                # Tokenize the processed text
                 tokens = self._tokenize_text(text=text_processed)
                 self.title_to_tokens[title] = tokens
 
                 if self.max_files and self.articles_processed >= self.max_files:
-                    self._save_to_disk(save_dir=self.save_dir)
+                    self._save_to_disk()
                     return
 
-        self._save_to_disk(save_dir=self.save_dir)
+        self._save_to_disk()
         logger.info(f"Done processing {self.articles_processed} articles.")
 
     def _tokenize_text(self, text: str) -> list[int]:
@@ -134,10 +147,10 @@ class Processor:
             tokens = [tokens]
         return tokens
 
-    def _save_to_disk(self, save_dir: Path) -> None:
+    def _save_to_disk(self) -> None:
         """Save the dictionaries to disk."""
         date_str = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-        save_dir = save_dir / date_str
+        save_dir = self.save_dir / date_str
         save_dir.mkdir(parents=True, exist_ok=True)
         title_to_links_path = save_dir / FILE_NAMES["title_to_links"]
         title_to_text_path = save_dir / FILE_NAMES["title_to_text"]
@@ -166,7 +179,7 @@ class Processor:
             A list of links found in the article.
         """
         text = html.unescape(text)
-        links = re.findall(r'<a href="([^"]+)">.+?</a>', text)
+        links = self._LINK_PATTERN.findall(text)  # Use compiled pattern
         decoded_links = [urllib.parse.unquote(link) for link in links]
 
         def _ignore_link(link_title: str) -> bool:
@@ -174,16 +187,20 @@ class Processor:
             if len(link_title) <= 1:
                 return True
 
-            # Ignore year patterns
-            if re.match(r"^\d{4}$", link_title):
+            # Ignore links as "1950"
+            if self._YEAR_PATTERN.match(link_title):
                 return True
 
-            # Ignore patterns as 1950'erne
-            if re.match(r"^\d{4}'erne$", link_title):
+            # Ignore link as "1950'erne"
+            if self._YEAR_ERNE_PATTERN.match(link_title):
                 return True
 
-            # Ignore date patterns like "10. september"
-            if re.match(r"^\d{1,2}\.\s+\w+$", link_title):
+            # Ignore links as "39 f.Kr."
+            if self._YEAR_BEFORE_CR_PATTERN.match(link_title):
+                return True
+
+            # Ignore date links as "10. september"
+            if self._DATE_PATTERN.match(link_title):
                 return True
 
             return False
@@ -193,53 +210,9 @@ class Processor:
             for link in decoded_links
             if not _ignore_link(link_title=link)
         ]
-        if self.case_sensitive_titles_and_links:
+        if not self.case_sensitive_titles_and_links:
             links = [link.lower() for link in links]
         return links
-
-    @staticmethod
-    def _get_all_ids(path: Path) -> list[int]:
-        """Get all the ids of the articles in the Wikipedia index file.
-
-        Args:
-            path: The path to the Wikipedia index file.
-
-        Returns:
-            A list of ids of the articles in the Wikipedia index file.
-        """
-        with open(path, "r", encoding="utf-8") as f:
-            wiki_index_text = f.read()
-        matches = re.findall(r'<doc id="(\d+)"', wiki_index_text)
-        return [int(match) for match in matches]
-
-    def _read_article(self, path: Path, id_: int) -> tuple[str, str]:
-        """Extract a Wikipedia article.
-
-        Args:
-            path: The path to the Wikipedia index file.
-            id: The id of the article to extract.
-
-        Returns:
-            A tuple containing the title and text of the article.
-        """
-        with open(path, "r", encoding="utf-8") as f:
-            wiki_index_text = f.read()
-
-        pattern = rf'<doc id="{id_}"[^>]*>(.*?)</doc>'
-        match = re.search(pattern, wiki_index_text, re.DOTALL)
-        if match:
-            text = match.group(1).strip()
-            no_content = "\n\n" not in text
-            if no_content:
-                return "", ""
-
-            title, text = text.split("\n\n", 1)
-
-            text = self._make_human_readable(string=text)
-            title = self._make_human_readable(string=title)
-            return title, text
-        else:
-            raise ValueError(f"Article with id {id_} not found in {path}")
 
     @staticmethod
     def _process_text(text: str) -> str:
@@ -301,3 +274,9 @@ class Processor:
         string = html.unescape(string)
         string = urllib.parse.unquote(string)
         return string
+
+    @staticmethod
+    def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+        """Read a JSONL file."""
+        with jsonlines.open(path, mode="r") as reader:
+            return list(reader)
