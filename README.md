@@ -22,12 +22,9 @@ make install
 We use the [WikiExtractor](https://github.com/attardi/wikiextractor) module to extract data from a Wikipedia dump.
 
 ```bash
-cd .. && git clone https://github.com/attardi/wikiextractor && \
+cd .. && git clone https://github.com/alexandrainst/wikiextractor && \
 cd wiki_expanded
 ```
-
-To make this module work, see [this issue](https://github.com/attardi/wikiextractor/issues/336#issuecomment-2700154486) (the solution in [this issue](https://github.com/attardi/wikiextractor/issues/336#issuecomment-2400360799) did not work for me).
-
 
 ## Usage
 
