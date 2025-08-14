@@ -52,7 +52,7 @@ python src/scripts/build_dataset.py
 ______________________________________________________________________
 [![Code Coverage](https://img.shields.io/badge/Coverage-0%25-red.svg)](https://github.com/alexandrainst/wiki_expanded/tree/main/tests)
 [![Documentation](https://img.shields.io/badge/docs-passing-green)](https://alexandrainst.github.io/wiki_expanded)
-[![License](https://img.shields.io/github/license/alexandrainst/wiki_expanded)](https://github.com/alexandrainst/wiki_expanded/blob/main/LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/alexandrainst/wiki_expanded/blob/main/LICENSE)
 [![LastCommit](https://img.shields.io/github/last-commit/alexandrainst/wiki_expanded)](https://github.com/alexandrainst/wiki_expanded/commits/main)
 [![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-2.0-4baaaa.svg)](https://github.com/alexandrainst/wiki_expanded/blob/main/CODE_OF_CONDUCT.md)
 
