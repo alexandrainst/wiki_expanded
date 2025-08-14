@@ -63,7 +63,7 @@ class DatasetBuilder:
         self.title_to_links: dict[str, list[str]] = {}
         self.title_to_text: dict[str, str] = {}
         self.link_to_freq: Counter[str] = Counter()
-        self.title_to_tokens: dict[str, list[str]] = {}
+        self.title_to_tokens: dict[str, list[int]] = {}
         self.title_to_num_tokens: dict[str, int] = {}
         self.num_tokens_threshold: int = num_tokens_threshold
         self.save_dir: Path = save_dir / datetime.datetime.now().strftime(
@@ -180,11 +180,10 @@ class DatasetBuilder:
         """
         links = self._get_links(title=title)
 
-        n_words = len(text.split())
-        n_tokens = self.title_to_num_tokens[title]
+        current_tokens: int = self.title_to_num_tokens[title]
         n_links_expanded: int = 0
         links_expanded: list[str] = []
-        while len(text.split()) < self.num_tokens_threshold:
+        while current_tokens < self.num_tokens_threshold:
             if not links:
                 break
             link = links.pop()
@@ -197,14 +196,12 @@ class DatasetBuilder:
             n_links_expanded += 1
             link_article = self.title_to_text[link]
             links_expanded.append(link)
-            n_words += len(link_article.split())
-            n_tokens += self.title_to_num_tokens[link]
+            current_tokens += self.title_to_num_tokens[link]
             text = self._include_link_text(link_article=link_article, text=text)
 
         sample = {
             "title": title,
-            "n_words": n_words,
-            "n_tokens": n_tokens,
+            "n_tokens": current_tokens,
             "links_expanded": links_expanded,
             "n_links_expanded": n_links_expanded,
             "expanded_text": text,
@@ -229,76 +226,85 @@ class DatasetBuilder:
         Returns:
             A list of links present in the article.
         """
-        links = self.title_to_links[title]
+        links: list[str] = self.title_to_links[title]
         links = list(set([link for link in links if link in self.title_to_text]))
 
         if self.link_priority_strategy == "length":
-            links = sorted(
-                links, key=lambda link: self.title_to_num_tokens[link], reverse=True
-            )
-
+            links = self._sort_by_length(links=links)
         elif self.link_priority_strategy == "frequency":
-            # Penalize links that have already been expanded
-            # The penalty will be at most `penalty_multiplier * max_link_expansions`
-            links = sorted(
-                links,
-                key=lambda link: self.link_to_freq[link]
-                + self.penalty_multiplier * self.link_expansion_count[link],
-                reverse=True,
-            )
+            links = self._sort_by_frequency(links=links)
         elif self.link_priority_strategy == "length_mix_frequency":
-
-            def _to_bucket(link: str) -> int:
-                """Assign link to bucket based on its frequency and expansion penalty.
-
-                Links that appear more frequently and have been expanded more times
-                will be placed into higher-numbered buckets.
-
-                Example of `items` after sorting wr.t. the tuple (bucket, num_tokens):
-                    ('jorden', 14, 13156)
-                    ('solen', 13, 14181)
-                    ('stjernebillede', 4, 717)
-                    ('stjerne', 3, 14476)
-                    ('helium', 3, 9416)
-                    ('ur', 1, 2761)
-                    ('galakse', 1, 904)
-                    ('parsec', 1, 570)
-                    ('ionisering', 1, 70)
-                    ('størrelsesklasse', 0, 1293)
-                    ('absolut størrelsesklasse', 0, 958)
-                    ('matematisk formel', 0, 210)
-                    ('henrietta swan leavitt', 0, 151)
-                    ('cepheus', 0, 133)
-                    ('lysstyrke', 0, 92)
-
-                In this case `lysstyrke` will be expanded first.
-
-                Args:
-                    link: The link title.
-
-                Returns:
-                    An integer representing the bucket for the link.
-                """
-                freq = self.link_to_freq[link]
-                penalty = self.penalty_multiplier * self.link_expansion_count[link]
-                value = freq + penalty
-                bucket = (
-                    int(value // self.penalty_multiplier)
-                    if self.penalty_multiplier > 0
-                    else 0
-                )
-                return bucket
-
-            buckets = [_to_bucket(link) for link in links]
-            num_tokens = [self.title_to_num_tokens[link] for link in links]
-            items = list(zip(links, buckets, num_tokens))
-
-            items = sorted(items, key=lambda items: (items[1], items[2]), reverse=True)
-
-            links = [item[0] for item in items]
+            links = self._sort_by_length_mix_frequency(links=links)
         else:
             raise ValueError(
                 f"Invalid link priority strategy: {self.link_priority_strategy}"
             )
 
+        return links
+
+    def _sort_by_length(self, links: list[str]) -> list[str]:
+        """Sort links by token length (longest first)."""
+        return sorted(
+            links, key=lambda link: self.title_to_num_tokens.get(link, 0), reverse=True
+        )
+
+    def _sort_by_frequency(self, links: list[str]) -> list[str]:
+        """Sort links by frequency with expansion penalty."""
+        return sorted(
+            links,
+            key=lambda link: self.link_to_freq.get(link, 0)
+            + self.penalty_multiplier * self.link_expansion_count[link],
+            reverse=True,
+        )
+
+    def _sort_by_length_mix_frequency(self, links: list[str]) -> list[str]:
+        """Sort links by bucket strategy combining length and frequency."""
+
+        def _to_bucket(link: str) -> int:
+            """Assign link to bucket based on its frequency and expansion penalty.
+
+            Links that appear more frequently and have been expanded more times
+            will be placed into higher-numbered buckets.
+
+            Example of `items` after sorting wr.t. the tuple (bucket, num_tokens):
+                ('jorden', 14, 13156)
+                ('solen', 13, 14181)
+                ('stjernebillede', 4, 717)
+                ('stjerne', 3, 14476)
+                ('helium', 3, 9416)
+                ('ur', 1, 2761)
+                ('galakse', 1, 904)
+                ('parsec', 1, 570)
+                ('ionisering', 1, 70)
+                ('størrelsesklasse', 0, 1293)
+                ('absolut størrelsesklasse', 0, 958)
+                ('matematisk formel', 0, 210)
+                ('henrietta swan leavitt', 0, 151)
+                ('cepheus', 0, 133)
+                ('lysstyrke', 0, 92)
+
+            In this case `lysstyrke` will be expanded first.
+
+            Args:
+                link: The link title.
+
+            Returns:
+                An integer representing the bucket for the link.
+            """
+            freq = self.link_to_freq[link]
+            penalty = self.penalty_multiplier * self.link_expansion_count[link]
+            value = freq + penalty
+            if self.penalty_multiplier > 0:
+                bucket = int(value // self.penalty_multiplier)
+            else:
+                bucket = int(freq) if freq > 0 else 0
+            return bucket
+
+        buckets = [_to_bucket(link) for link in links]
+        num_tokens = [self.title_to_num_tokens[link] for link in links]
+        items = list(zip(links, buckets, num_tokens))
+
+        items = sorted(items, key=lambda items: (items[1], items[2]), reverse=True)
+
+        links = [item[0] for item in items]
         return links
