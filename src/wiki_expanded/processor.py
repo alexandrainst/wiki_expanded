@@ -9,6 +9,8 @@ import urllib.parse
 from collections import Counter
 from pathlib import Path
 
+from transformers import AutoTokenizer
+
 from .constants import FILE_NAMES
 
 logging.basicConfig(
@@ -21,63 +23,116 @@ logger = logging.getLogger(__name__)
 
 
 class Processor:
-    """Processes raw Wikipedia article files to build four dictionaries.
+    """Processes raw Wikipedia article files to build five dictionaries.
 
-    Dictionaries built that will be used to build the Wiki Expanded dataset:
+    Dictionaries built that will be used to build the expanded Wikipedia dataset:
     1. title_to_text: Maps each article title to its text.
     2. title_to_links: Maps each article title to the links found in the article.
     3. link_to_freq: Maps each link to the number of articles it appears in.
-    4. titles_lowered_to_original: Maps each lowercase title to the original title.
+    4. original_title: Maps each lowercase title to the original title.
+    5. title_to_tokens: Maps each article title to its tokenized content.
 
     Args:
         text_dir (Path): Directory containing raw article text files.
         save_dir (Path): Directory to save the processed dictionaries.
         max_files (int, optional): Maximum number of files to process.
             If None, process all files.
+        tokenizer_name (str, optional): Name of the tokenizer to use.
+            Defaults to "google/gemma-7b".
     """
 
     def __init__(
-        self, text_dir: Path, save_dir: Path, max_files: int | None = None
+        self,
+        text_dir: Path,
+        save_dir: Path,
+        max_files: int | None = None,
+        tokenizer_name: str = "google/gemma-7b",
+        case_sensitive_titles_and_links: bool = True,
     ) -> None:
         """Initialize the Processor."""
         self.title_to_links: dict[str, list[str]] = {}
         self.title_to_text: dict[str, str] = {}
+        self.title_to_tokens: dict[str, list[int]] = {}
         self.link_to_freq: Counter[str] = Counter()
-        self.titles_lowered_to_original: dict[str, str] = {}
+        self.original_title: dict[str, str] = {}
         self.titles_seen: set[str] = set()
-        self.files_processed: int = 0
+        self.articles_processed: int = 0
         self.text_dir: Path = text_dir
         self.save_dir: Path = save_dir
         self.max_files: int | None = max_files
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        self.case_sensitive_titles_and_links: bool = case_sensitive_titles_and_links
 
     def process(self) -> None:
-        """Build the four dictionaries."""
+        """Build the five dictionaries."""
         for path in self.text_dir.glob("*/wiki_*"):
             ids = self._get_all_ids(path=path)
 
-            for id in ids:
-                title, text = self._read_article(path=path, id=id)
-                self.files_processed += 1
-                if not self.files_processed % 10000:
-                    logger.info(f"Processed {self.files_processed} files")
+            for id_ in ids:
+                title, text = self._read_article(path=path, id_=id_)
+                self.articles_processed += 1
+                if not self.articles_processed % 10000:
+                    logger.info(f"Processed {self.articles_processed} articles.")
 
-                if not title or title.lower() in self.titles_seen:
+                if not title:
                     continue
 
-                self.titles_lowered_to_original[title.lower()] = title
-                title = title.lower()
+                title_cased = title
+                title = title.lower() if self.case_sensitive_titles_and_links else title
+                text_processed = self._process_text(text=text)
+                if title in self.titles_seen:
+                    # There are title duplicates
+                    # Prioritize the longer text
+                    # See for example https://da.wikipedia.org/wiki/Usa
+                    old_text_processed = self.title_to_text[title]
+                    override: bool = len(text_processed) > len(old_text_processed)
+                    if not override:
+                        continue
+
+                    logger.info(
+                        f"Overriding '{self.original_title[title]}' with '{title}'.\n"
+                        f"Previous text head: {old_text_processed[:100]!r}\n"
+                        f"New text head:      {text_processed[:100]!r}"
+                    )
+                    # Before overriding, decrement the link counts from
+                    # previous article/title
+                    for link in self.title_to_links[title]:
+                        self.link_to_freq[link] -= 1
+
+                self.original_title[title] = title_cased
 
                 self.titles_seen.add(title)
                 links = self._extract_links(text=text)
                 self.link_to_freq.update(links)
+
                 self.title_to_links[title] = links
-                text_processed = self._process_text(text=text)
                 self.title_to_text[title] = text_processed
-                if self.max_files and self.files_processed >= self.max_files:
+
+                # Tokenize the processed text
+                tokens = self._tokenize_text(text=text_processed)
+                self.title_to_tokens[title] = tokens
+
+                if self.max_files and self.articles_processed >= self.max_files:
                     self._save_to_disk(save_dir=self.save_dir)
                     return
 
         self._save_to_disk(save_dir=self.save_dir)
+        logger.info(f"Done processing {self.articles_processed} articles.")
+
+    def _tokenize_text(self, text: str) -> list[int]:
+        """Tokenize the text using the configured tokenizer.
+
+        Args:
+            text: The text to tokenize.
+
+        Returns:
+            A list of token IDs.
+        """
+        input_ids = self.tokenizer(text, return_tensors="pt")
+        tokens = input_ids["input_ids"].squeeze().tolist()
+        if isinstance(tokens, int):
+            tokens = [tokens]
+        return tokens
 
     def _save_to_disk(self, save_dir: Path) -> None:
         """Save the dictionaries to disk."""
@@ -86,22 +141,22 @@ class Processor:
         save_dir.mkdir(parents=True, exist_ok=True)
         title_to_links_path = save_dir / FILE_NAMES["title_to_links"]
         title_to_text_path = save_dir / FILE_NAMES["title_to_text"]
+        title_to_tokens_path = save_dir / FILE_NAMES["title_to_tokens"]
         link_to_freq_path = save_dir / FILE_NAMES["link_to_freq"]
-        titles_lowered_to_original_path = (
-            save_dir / FILE_NAMES["titles_lowered_to_original"]
-        )
+        original_title_path = save_dir / FILE_NAMES["original_title"]
 
         with open(title_to_links_path, "w") as f:
             json.dump(self.title_to_links, f)
         with open(title_to_text_path, "w") as f:
             json.dump(self.title_to_text, f)
+        with open(title_to_tokens_path, "w") as f:
+            json.dump(self.title_to_tokens, f)
         with open(link_to_freq_path, "w") as f:
             json.dump(self.link_to_freq, f)
-        with open(titles_lowered_to_original_path, "w") as f:
-            json.dump(self.titles_lowered_to_original, f)
+        with open(original_title_path, "w") as f:
+            json.dump(self.original_title, f)
 
-    @staticmethod
-    def _extract_links(text: str) -> list[str]:
+    def _extract_links(self, text: str) -> list[str]:
         """Extract links from a Wikipedia article.
 
         Args:
@@ -123,15 +178,24 @@ class Processor:
             if re.match(r"^\d{4}$", link_title):
                 return True
 
+            # Ignore patterns as 1950'erne
+            if re.match(r"^\d{4}'erne$", link_title):
+                return True
+
             # Ignore date patterns like "10. september"
             if re.match(r"^\d{1,2}\.\s+\w+$", link_title):
                 return True
 
             return False
 
-        return [
-            link.lower() for link in decoded_links if not _ignore_link(link_title=link)
+        links = [
+            self._make_human_readable(string=link)
+            for link in decoded_links
+            if not _ignore_link(link_title=link)
         ]
+        if self.case_sensitive_titles_and_links:
+            links = [link.lower() for link in links]
+        return links
 
     @staticmethod
     def _get_all_ids(path: Path) -> list[int]:
@@ -148,8 +212,7 @@ class Processor:
         matches = re.findall(r'<doc id="(\d+)"', wiki_index_text)
         return [int(match) for match in matches]
 
-    @staticmethod
-    def _read_article(path: Path, id: int) -> tuple[str, str]:
+    def _read_article(self, path: Path, id_: int) -> tuple[str, str]:
         """Extract a Wikipedia article.
 
         Args:
@@ -162,7 +225,7 @@ class Processor:
         with open(path, "r", encoding="utf-8") as f:
             wiki_index_text = f.read()
 
-        pattern = rf'<doc id="{id}"[^>]*>(.*?)</doc>'
+        pattern = rf'<doc id="{id_}"[^>]*>(.*?)</doc>'
         match = re.search(pattern, wiki_index_text, re.DOTALL)
         if match:
             text = match.group(1).strip()
@@ -172,15 +235,11 @@ class Processor:
 
             title, text = text.split("\n\n", 1)
 
-            def _make_text_human_readable(text: str) -> str:
-                text = html.unescape(text)
-                text = urllib.parse.unquote(text)
-                return text
-
-            text = _make_text_human_readable(text=text)
+            text = self._make_human_readable(string=text)
+            title = self._make_human_readable(string=title)
             return title, text
         else:
-            raise ValueError(f"Article with id {id} not found in {path}")
+            raise ValueError(f"Article with id {id_} not found in {path}")
 
     @staticmethod
     def _process_text(text: str) -> str:
@@ -193,16 +252,27 @@ class Processor:
             The processed text of the Wikipedia article.
         """
 
+        def _remove_alternative_meanings_first_line(lines: list[str]) -> list[str]:
+            if not lines:
+                return lines
+            if "For alternative betydninger, se" in lines[0]:
+                lines.pop(0)
+            return lines
+
         def _remove_html_links(text: str) -> str:
             text = re.sub(r'<a href="[^"]*">(.*?)</a>', r"\1", text)
             return text
 
         def _remove_css_styling(lines: list[str]) -> list[str]:
-            if lines[-1] == '<templatestyles src="Reflist/styles.css" />':
+            if not lines:
+                return lines
+            if "<templatestyles" in lines[-1]:
                 lines.pop()
             return lines
 
         def _remove_trailing_header(lines: list[str]) -> list[str]:
+            if not lines:
+                return lines
             last_section = lines[-1]
             is_header = len(last_section.split(" ")) <= 2
             if is_header:
@@ -211,8 +281,23 @@ class Processor:
 
         text = _remove_html_links(text=text)
         lines = text.split("\n")
+        lines = _remove_alternative_meanings_first_line(lines=lines)
         lines = _remove_css_styling(lines=lines)
         lines = _remove_trailing_header(lines=lines)
 
         text = "\n".join(lines)
         return text
+
+    @staticmethod
+    def _make_human_readable(string: str) -> str:
+        """Make a string human readable.
+
+        Args:
+            string: The string to make human readable.
+
+        Returns:
+            The human readable string.
+        """
+        string = html.unescape(string)
+        string = urllib.parse.unquote(string)
+        return string

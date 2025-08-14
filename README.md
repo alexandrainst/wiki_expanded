@@ -37,13 +37,13 @@ To make this module work, see [this issue](https://github.com/attardi/wikiextrac
 python -m ../wikiextractor.WikiExtractor dawiki-latest-pages-articles.xml.bz2 --links --output=data/raw/text
 ```
 
-2. Process the extracted data to build four json files that will be used to construct the Wiki Expanded dataset.
+2. Process the extracted data to build four json files that will be used to construct the expanded Wikipedia dataset.
 
 ```bash
 python src/scripts/process.py
 ```
 
-3. Build the Wiki Expanded dataset.
+3. Build the expanded Wikipedia dataset.
 
 ```bash
 python src/scripts/build_dataset.py

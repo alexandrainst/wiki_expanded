@@ -1,11 +1,14 @@
-"""Build 3 dictionaries that will be used to to construct the Wiki Expanded dataset.
+"""Build 5 dictionaries that will be used to construct the expanded Wikipedia dataset.
 
-1. `data/processed/title_to_text.json`: Maps each title to the text of the article.
-2. `data/processed/title_to_links.json`: Maps each title to the links in the article.
-3. `data/processed/link_to_freq.json`: Maps each link to the number of articles
-    it appears in.
-4. `data/processed/titles_lowered_to_original.json`: Maps each lowercase title to
-    the original title.
+1. `data/processed/title_to_text.json`: Maps each article title to its text.
+2. `data/processed/title_to_links.json`: Maps each article title to
+    the links found in the article.
+3. `data/processed/link_to_freq.json`: Maps each link to the number
+    of articles it appears in.
+4. `data/processed/title_lower_to_original.json`: Maps each lowercase
+    title to the original title.
+5. `data/processed/title_to_tokens.json`: Maps each article title to
+    its tokenized content.
 """
 
 from pathlib import Path
@@ -34,9 +37,32 @@ from wiki_expanded.processor import Processor
     type=int,
     help="Maximum number of files to process. If None, process all files.",
 )
-def main(text_dir: Path, save_dir: Path, max_files: int | None) -> None:
+@click.option(
+    "--tokenizer-name",
+    default="google/gemma-7b",
+    type=str,
+    help="Name of the tokenizer to use.",
+)
+@click.option(
+    "--case-sensitive-titles-links/--no-case-sensitive-titles-links",
+    default=True,
+    help="Whether to treat titles and links as case sensitive (default: True).",
+)
+def main(
+    text_dir: Path,
+    save_dir: Path,
+    max_files: int | None,
+    tokenizer_name: str = "google/gemma-7b",
+    case_sensitive_titles_links: bool = True,
+) -> None:
     """Process the raw articles."""
-    processor = Processor(text_dir=text_dir, save_dir=save_dir, max_files=max_files)
+    processor = Processor(
+        text_dir=text_dir,
+        save_dir=save_dir,
+        max_files=max_files,
+        tokenizer_name=tokenizer_name,
+        case_sensitive_titles_and_links=case_sensitive_titles_links,
+    )
     processor.process()
 
 

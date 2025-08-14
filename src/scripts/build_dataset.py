@@ -1,10 +1,4 @@
-"""Build 3 dictionaries that will be used to to construct the Wiki Expanded dataset.
-
-1. `data/processed/title_to_text.json`: Maps each title to the text of the article.
-2. `data/processed/title_to_links.json`: Maps each title to the links in the article.
-3. `data/processed/link_to_freq.json`: Maps each link to the number of articles it
-    appears in.
-"""
+"""Build the expanded Wikipedia dataset."""
 
 from pathlib import Path
 
@@ -21,10 +15,10 @@ from wiki_expanded.dataset_builder import DatasetBuilder
     help="Directory containing processed data.",
 )
 @click.option(
-    "--max-words",
+    "--num-tokens-threshold",
     default=10000,
     type=int,
-    help="Maximum number of words in expanded text.",
+    help="Stop expanding links when the text is at least this many tokens long.",
 )
 @click.option(
     "--save-dir",
@@ -38,15 +32,60 @@ from wiki_expanded.dataset_builder import DatasetBuilder
     type=int,
     help="Maximum number of samples in the expanded dataset. If None, use all.",
 )
+@click.option(
+    "--max-link-expansions",
+    default=None,
+    type=int,
+    help="Maximum number of times a link can be expanded. If None, no limit.",
+)
+@click.option(
+    "--include-strategy",
+    default="prepend",
+    type=click.Choice(["prepend", "append"], case_sensitive=False),
+    help="Strategy for how to include link text.",
+)
+@click.option(
+    "--ignore-short-samples",
+    default=False,
+    type=bool,
+    help="Ignore samples with fewer than `num_tokens_threshold` tokens.",
+)
+@click.option(
+    "--link-priority-strategy",
+    default="length",
+    type=click.Choice(
+        ["length", "frequency", "length_mix_frequency"], case_sensitive=False
+    ),
+    help="Strategy for prioritizing which links to expand.",
+)
+@click.option(
+    "--penalty-multiplier",
+    default=0.0,
+    type=float,
+    help="Multiplier for the penalty for links that have already been expanded.",
+)
 def main(
-    processed_dir: Path, max_words: int, save_dir: Path, max_dataset_length: int | None
+    processed_dir: Path,
+    num_tokens_threshold: int,
+    save_dir: Path,
+    max_dataset_length: int | None,
+    max_link_expansions: int | None = None,
+    include_strategy: str = "prepend",
+    ignore_short_samples: bool = False,
+    link_priority_strategy: str = "length",
+    penalty_multiplier: float = 0.0,
 ) -> None:
-    """Build the Expanded Wikipedia dataset."""
+    """Build the expanded Wikipedia dataset."""
     builder = DatasetBuilder(
         processed_dir=processed_dir,
-        max_words=max_words,
+        num_tokens_threshold=num_tokens_threshold,
         save_dir=save_dir,
         max_dataset_length=max_dataset_length,
+        max_link_expansions=max_link_expansions,
+        include_strategy=include_strategy,
+        ignore_short_samples=ignore_short_samples,
+        link_priority_strategy=link_priority_strategy,
+        penalty_multiplier=penalty_multiplier,
     )
     builder.build_expanded_dataset()
 
