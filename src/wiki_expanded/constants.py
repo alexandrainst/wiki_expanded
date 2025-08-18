@@ -8,4 +8,5 @@ FILE_NAMES = {
     "original_title": "original_title.json",
     "dataset": "dataset.jsonl",
     "link_expansion_count": "link_expansion_count.json",
+    "redirects": "redirects.json",
 }

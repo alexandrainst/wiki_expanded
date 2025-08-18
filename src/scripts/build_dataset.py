@@ -50,20 +50,6 @@ from wiki_expanded.dataset_builder import DatasetBuilder
     type=bool,
     help="Ignore samples with fewer than `num_tokens_threshold` tokens.",
 )
-@click.option(
-    "--link-priority-strategy",
-    default="length",
-    type=click.Choice(
-        ["length", "frequency", "length_mix_frequency"], case_sensitive=False
-    ),
-    help="Strategy for prioritizing which links to expand.",
-)
-@click.option(
-    "--penalty-multiplier",
-    default=0.0,
-    type=float,
-    help="Multiplier for the penalty for links that have already been expanded.",
-)
 def main(
     processed_dir: Path,
     num_tokens_threshold: int,
@@ -72,8 +58,6 @@ def main(
     max_link_expansions: int | None = None,
     include_strategy: str = "prepend",
     ignore_short_samples: bool = False,
-    link_priority_strategy: str = "length",
-    penalty_multiplier: float = 0.0,
 ) -> None:
     """Build the expanded Wikipedia dataset."""
     builder = DatasetBuilder(
@@ -84,8 +68,6 @@ def main(
         max_link_expansions=max_link_expansions,
         include_strategy=include_strategy,
         ignore_short_samples=ignore_short_samples,
-        link_priority_strategy=link_priority_strategy,
-        penalty_multiplier=penalty_multiplier,
     )
     builder.build_expanded_dataset()
 

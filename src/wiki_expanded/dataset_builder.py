@@ -38,14 +38,9 @@ class DatasetBuilder:
             text. If "append", the link text is appended to the text.
         ignore_short_samples (bool, optional): Ignore samples with fewer than
             `num_tokens_threshold` tokens.
-        link_priority_strategy (str, optional): The strategy to use for prioritizing
-            links. If "length", prioritize links with the least number of tokens. If
-            "frequency", prioritize links that appear in the least number of articles.
-            If "length_mix_frequency", prioritize based on a combination of link length
-            and frequency.
-        penalty_multiplier (float, optional): The multiplier for the penalty for links
-            that have already been expanded.
     """
+
+    PROGRESS_LOG_INTERVAL = 10000
 
     def __init__(
         self,
@@ -56,8 +51,6 @@ class DatasetBuilder:
         max_link_expansions: int | None = None,
         include_strategy: str = "prepend",
         ignore_short_samples: bool = False,
-        link_priority_strategy: str = "length",
-        penalty_multiplier: float = 0.0,
     ) -> None:
         """Initialize the DatasetBuilder."""
         self.title_to_links: dict[str, list[str]] = {}
@@ -69,7 +62,6 @@ class DatasetBuilder:
         self.save_dir: Path = save_dir / datetime.datetime.now().strftime(
             "%Y-%m-%d-%H-%M-%S"
         )
-        self.titles_in_dataset: set[str] = set()
         self.link_expansion_count: Counter[str] = Counter()
         self.files_expanded: int = 0
         self.dataset_length: int = 0
@@ -77,8 +69,9 @@ class DatasetBuilder:
         self.max_link_expansions: int | None = max_link_expansions
         self.include_strategy: str = include_strategy
         self.ignore_short_samples: bool = ignore_short_samples
-        self.link_priority_strategy: str = link_priority_strategy
-        self.penalty_multiplier: float = penalty_multiplier
+
+        self.links_considered_in_first_iteration_but_not_expanded: set[str] = set()
+        self.all_links_considered_for_expansion: set[str] = set()
 
         self.dataset_path: Path = self.save_dir / FILE_NAMES["dataset"]
         self.link_expansion_path: Path = (
@@ -88,9 +81,47 @@ class DatasetBuilder:
 
     def build_expanded_dataset(self) -> None:
         """Build the expanded Wikipedia dataset."""
+        for iteration in range(2):
+            self._init_dataset()
+            self._build_dataset(iteration=iteration)
+
+            if iteration == 0:
+                self.links_considered_in_first_iteration_but_not_expanded = (
+                    self.all_links_considered_for_expansion
+                    - set(self.link_expansion_count.keys())
+                )
+
+            logger.info(
+                f"Total number of unique expanded links "
+                f"(iteration {iteration}): "
+                f"{len(self.link_expansion_count)}"
+            )
+            logger.info(
+                f"Total number of links expanded "
+                f"(iteration {iteration}): "
+                f"{sum(self.link_expansion_count.values())}"
+            )
+            logger.info(
+                f"Total number of links considered for expansion: "
+                f"{len(self.all_links_considered_for_expansion)}"
+            )
+
+        self._save_link_expansion_count()
+        logger.info(f"Done building dataset. Saved {self.dataset_length} samples.")
+
+    def _init_dataset(self) -> None:
+        self.link_expansion_count = Counter()
+        self.files_expanded = 0
+        self.dataset_length = 0
+
+        if not self.dataset_path.exists():
+            self.save_dir.mkdir(parents=True, exist_ok=True)
+            self.dataset_path.touch()
+
+    def _build_dataset(self, iteration: int) -> None:
         n_titles = len(self.title_to_text)
         for i, (title, text) in enumerate(self.title_to_text.items()):
-            if not i % 1000:
+            if not i % self.PROGRESS_LOG_INTERVAL:
                 logger.info(f"Processed {i}/{n_titles} titles")
 
             sample = self._expand(title=title, text=text)
@@ -100,17 +131,32 @@ class DatasetBuilder:
             ):
                 continue
 
-            self._track_expanded_links(links=sample["links_expanded"])
-            self._append_sample(sample=sample)
+            if iteration == 0:
+                links = self.title_to_links[title]
+                self.all_links_considered_for_expansion.update(links)
 
-            dataset_done = (
-                self.max_dataset_length
-                and self.dataset_length >= self.max_dataset_length
+            self._track_expanded_links(links=sample["links_expanded"])
+            if iteration == 1:
+                self._append_sample(sample=sample)
+
+            self.dataset_length += 1
+            dataset_done = self.max_dataset_length and (
+                self.dataset_length >= self.max_dataset_length
             )
             if dataset_done:
                 break
 
-        self._save_link_expansion_count()
+    def _find_links_not_expanded_in_iteration(self) -> set[str]:
+        """Find links that were not expanded in the first iteration.
+
+        These will be prioritized in the second iteration.
+        """
+        links = [
+            link
+            for link in self.link_to_freq
+            if link in self.title_to_text and link not in self.link_expansion_count
+        ]
+        return set(links)
 
     def _track_expanded_links(self, links: list[str]) -> None:
         """Track the expanded links."""
@@ -119,14 +165,8 @@ class DatasetBuilder:
 
     def _append_sample(self, sample: dict[str, Any]) -> None:
         """Append a sample to the dataset."""
-        if not self.dataset_path.exists():
-            self.save_dir.mkdir(parents=True, exist_ok=True)
-            self.dataset_path.touch()
-
         with jsonlines.open(self.dataset_path, mode="a") as writer:
             writer.write(sample)
-
-        self.dataset_length += 1
 
     def _save_link_expansion_count(self) -> None:
         """Save the link expansion count to disk."""
@@ -187,11 +227,6 @@ class DatasetBuilder:
             if not links:
                 break
             link = links.pop()
-            if (
-                self.max_link_expansions
-                and self.link_expansion_count[link] >= self.max_link_expansions
-            ):
-                continue
 
             n_links_expanded += 1
             link_article = self.title_to_text[link]
@@ -209,6 +244,15 @@ class DatasetBuilder:
         return sample
 
     def _include_link_text(self, link_article: str, text: str) -> str:
+        """Include the link text in the text.
+
+        Args:
+            link_article: The text of the link article.
+            text: The text of the Wikipedia article.
+
+        Returns:
+            The text of the Wikipedia article with the link text included.
+        """
         if self.include_strategy == "append":
             text = f"{text}\n\n{link_article}"
         elif self.include_strategy == "prepend":
@@ -229,82 +273,57 @@ class DatasetBuilder:
         links: list[str] = self.title_to_links[title]
         links = list(set([link for link in links if link in self.title_to_text]))
 
-        if self.link_priority_strategy == "length":
-            links = self._sort_by_length(links=links)
-        elif self.link_priority_strategy == "frequency":
-            links = self._sort_by_frequency(links=links)
-        elif self.link_priority_strategy == "length_mix_frequency":
-            links = self._sort_by_length_mix_frequency(links=links)
-        else:
-            raise ValueError(
-                f"Invalid link priority strategy: {self.link_priority_strategy}"
-            )
+        if self.max_link_expansions:
+            links = [
+                link
+                for link in links
+                if self.link_expansion_count[link] < self.max_link_expansions
+            ]
+
+        links = self._prioritize_links(links=links)
 
         return links
 
-    def _sort_by_length(self, links: list[str]) -> list[str]:
-        """Sort links by token length (longest first)."""
-        return sorted(
-            links, key=lambda link: self.title_to_num_tokens.get(link, 0), reverse=True
+    def _prioritize_links(self, links: list[str]) -> list[str]:
+        """Queue links by expansion count, frequency, and token length.
+
+        Links with low expansion count, low frequency, and few tokens are prioritized.
+        """
+        if not links:
+            return links
+
+        # If a link was not expanded in the first iteration,
+        # and has not yet been expanded, prioritize it.
+        to_prioritize: list[bool] = [
+            link in self.links_considered_in_first_iteration_but_not_expanded
+            and self.link_expansion_count[link] == 0
+            for link in links
+        ]
+
+        expansion_counts: list[int] = [
+            self.link_expansion_count[link] for link in links
+        ]
+        frequencies: list[int] = [self.link_to_freq[link] for link in links]
+        num_tokens: list[int] = [self.title_to_num_tokens[link] for link in links]
+        items: list[tuple[str, bool, int, int, int]] = list(
+            zip(links, to_prioritize, expansion_counts, frequencies, num_tokens)
         )
 
-    def _sort_by_frequency(self, links: list[str]) -> list[str]:
-        """Sort links by frequency with expansion penalty."""
-        return sorted(
-            links,
-            key=lambda link: self.link_to_freq.get(link, 0)
-            + self.penalty_multiplier * self.link_expansion_count[link],
+        # Sort by:
+        #   (not_expanded_in_first_iteration descending,
+        #    expansion_count ascending,
+        #    frequency ascending,
+        #    num_tokens descending)
+        # This prioritizes:
+        #   links not expanded in first iteration,
+        #   less expanded links,
+        #   less frequent links,
+        #   fewer tokens
+        items = sorted(
+            items,
+            key=lambda item: (not item[1], item[2], item[3], item[4]),
             reverse=True,
         )
-
-    def _sort_by_length_mix_frequency(self, links: list[str]) -> list[str]:
-        """Sort links by bucket strategy combining length and frequency."""
-
-        def _to_bucket(link: str) -> int:
-            """Assign link to bucket based on its frequency and expansion penalty.
-
-            Links that appear more frequently and have been expanded more times
-            will be placed into higher-numbered buckets.
-
-            Example of `items` after sorting wr.t. the tuple (bucket, num_tokens):
-                ('jorden', 14, 13156)
-                ('solen', 13, 14181)
-                ('stjernebillede', 4, 717)
-                ('stjerne', 3, 14476)
-                ('helium', 3, 9416)
-                ('ur', 1, 2761)
-                ('galakse', 1, 904)
-                ('parsec', 1, 570)
-                ('ionisering', 1, 70)
-                ('størrelsesklasse', 0, 1293)
-                ('absolut størrelsesklasse', 0, 958)
-                ('matematisk formel', 0, 210)
-                ('henrietta swan leavitt', 0, 151)
-                ('cepheus', 0, 133)
-                ('lysstyrke', 0, 92)
-
-            In this case `lysstyrke` will be expanded first.
-
-            Args:
-                link: The link title.
-
-            Returns:
-                An integer representing the bucket for the link.
-            """
-            freq = self.link_to_freq[link]
-            penalty = self.penalty_multiplier * self.link_expansion_count[link]
-            value = freq + penalty
-            if self.penalty_multiplier > 0:
-                bucket = int(value // self.penalty_multiplier)
-            else:
-                bucket = int(freq) if freq > 0 else 0
-            return bucket
-
-        buckets = [_to_bucket(link) for link in links]
-        num_tokens = [self.title_to_num_tokens[link] for link in links]
-        items = list(zip(links, buckets, num_tokens))
-
-        items = sorted(items, key=lambda items: (items[1], items[2]), reverse=True)
 
         links = [item[0] for item in items]
         return links

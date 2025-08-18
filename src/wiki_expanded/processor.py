@@ -41,13 +41,18 @@ class Processor:
             If None, process all files.
         tokenizer_name (str, optional): Name of the tokenizer to use.
             Defaults to "google/gemma-7b".
+        capitalize_titles_and_links (bool): Wether to capitalize titles
+            and links or not.
     """
 
+    PROGRESS_LOG_INTERVAL = 10000
+
     _LINK_PATTERN = re.compile(r'<a href="([^"]+)">.+?</a>')
-    _YEAR_PATTERN = re.compile(r"^\d{4}$")
-    _YEAR_ERNE_PATTERN = re.compile(r"^\d{4}'erne$")
+    _CENTURY_PATTERN = re.compile(r"^\d+\.\s*århundrede f\.Kr\.$", re.IGNORECASE)
+    _YEAR_ERNE_PATTERN = re.compile(r"^\d{4}'erne")
     _YEAR_BEFORE_CR_PATTERN = re.compile(r"^\d+\s*f\.Kr\.$")
     _DATE_PATTERN = re.compile(r"^\d{1,2}\.\s+\w+$")
+    _ONLY_NUMBERS_PATTERN = re.compile(r"^\d+$")
 
     def __init__(
         self,
@@ -55,7 +60,8 @@ class Processor:
         save_dir: Path,
         max_files: int | None = None,
         tokenizer_name: str = "google/gemma-7b",
-        case_sensitive_titles_and_links: bool = True,
+        capitalize_titles_and_links: bool = True,
+        redirects_path: Path = Path("data/raw/redirects.json"),  # Add parameter
     ) -> None:
         """Initialize the Processor."""
         self.title_to_links: dict[str, list[str]] = {}
@@ -63,13 +69,14 @@ class Processor:
         self.title_to_tokens: dict[str, list[int]] = {}
         self.link_to_freq: Counter[str] = Counter()
         self.original_title: dict[str, str] = {}
+        self.redirects: dict[str, str] = json.load(open(redirects_path, "r"))
         self.titles_seen: set[str] = set()
         self.articles_processed: int = 0
         self.text_dir: Path = text_dir
         self.save_dir: Path = save_dir
         self.max_files: int | None = max_files
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        self.case_sensitive_titles_and_links: bool = case_sensitive_titles_and_links
+        self.capitalize_titles_and_links: bool = capitalize_titles_and_links
 
     def process(self) -> None:
         """Build the five dictionaries."""
@@ -82,16 +89,28 @@ class Processor:
                 )
 
                 self.articles_processed += 1
-                if not self.articles_processed % 10000:
+                if not self.articles_processed % self.PROGRESS_LOG_INTERVAL:
                     logger.info(f"Processed {self.articles_processed} articles.")
 
-                if not title:
-                    logger.warning(f"No title found for {article['id']} in {path}")
+                original_title = title
+                title = (
+                    self._capitalize(title)
+                    if self.capitalize_titles_and_links
+                    else title
+                )
+
+                title = self.redirects[title] if title in self.redirects else title
+
+                if (
+                    self._missing_data(title=title, text=text)
+                    or self._ignore_title(title=title)
+                    or self._ignore_text(text=text)
+                ):
                     continue
 
-                title_cased = title
-                title = title if self.case_sensitive_titles_and_links else title.lower()
                 text_processed = self._process_text(text=text)
+                if not text_processed:
+                    continue
 
                 if title in self.titles_seen:
                     # There are title duplicates (given case insensitivity)
@@ -114,7 +133,7 @@ class Processor:
 
                 self.titles_seen.add(title)
 
-                self.original_title[title] = title_cased
+                self.original_title[title] = original_title
 
                 links = self._extract_links(text=text)
                 self.title_to_links[title] = links
@@ -179,40 +198,73 @@ class Processor:
             A list of links found in the article.
         """
         text = html.unescape(text)
-        links = self._LINK_PATTERN.findall(text)  # Use compiled pattern
+        links = list(set(self._LINK_PATTERN.findall(text)))
         decoded_links = [urllib.parse.unquote(link) for link in links]
-
-        def _ignore_link(link_title: str) -> bool:
-            # Ignore links that are too short. Can be articles about a single letter
-            if len(link_title) <= 1:
-                return True
-
-            # Ignore links as "1950"
-            if self._YEAR_PATTERN.match(link_title):
-                return True
-
-            # Ignore link as "1950'erne"
-            if self._YEAR_ERNE_PATTERN.match(link_title):
-                return True
-
-            # Ignore links as "39 f.Kr."
-            if self._YEAR_BEFORE_CR_PATTERN.match(link_title):
-                return True
-
-            # Ignore date links as "10. september"
-            if self._DATE_PATTERN.match(link_title):
-                return True
-
-            return False
 
         links = [
             self._make_human_readable(string=link)
             for link in decoded_links
-            if not _ignore_link(link_title=link)
+            if not self._ignore_title(title=link)
         ]
-        if not self.case_sensitive_titles_and_links:
-            links = [link.lower() for link in links]
+
+        links = [
+            self.redirects[link] if link in self.redirects else link for link in links
+        ]
+
+        if self.capitalize_titles_and_links:
+            links = [self._capitalize(link) for link in links]
         return links
+
+    @staticmethod
+    def _capitalize(string: str) -> str:
+        return string[0].upper() + string[1:]
+
+    def _ignore_title(self, title: str) -> bool:
+        # Ignore links that are too short. Can be articles about a single letter
+        if len(title) <= 1:
+            return True
+
+        # Ignore links that are only numbers
+        if self._ONLY_NUMBERS_PATTERN.match(title):
+            return True
+
+        # Ignore links are "18. århundrede f.Kr."
+        if self._CENTURY_PATTERN.match(title):
+            return True
+
+        # Ignore link as "1950'erne"
+        if self._YEAR_ERNE_PATTERN.match(title):
+            return True
+
+        # Ignore links as "39 f.Kr."
+        if self._YEAR_BEFORE_CR_PATTERN.match(title):
+            return True
+
+        # Ignore date links as "10. september"
+        if self._DATE_PATTERN.match(title):
+            return True
+
+        return False
+
+    def _ignore_text(self, text: str) -> bool:
+        """Return True if text should be ignored based on unwanted starting lines."""
+        unwanted_starts = [
+            "For alternative betydninger, se",
+            "Dette er en , som omdirigerer fra en fejlskrivning",
+            "omdirigeringer med denne skabelon",
+            "omdirigeres hertil. For",
+            "#REDIRECT",
+            "refererer til flere ting:",
+            "har flere betydninger:",
+            "Opslagsordet har også en anden betydning",
+            "kan have flere betydninger:",
+            "kan betyde:",
+            "Der er for få eller ingen i denne artikel",
+            "kan henvise til flere artikler:",
+            "henfører primært til:",
+        ]
+        first_line = text.split("\n", 1)[0]
+        return any(unwanted in first_line for unwanted in unwanted_starts)
 
     @staticmethod
     def _process_text(text: str) -> str:
@@ -225,10 +277,12 @@ class Processor:
             The processed text of the Wikipedia article.
         """
 
-        def _remove_alternative_meanings_first_line(lines: list[str]) -> list[str]:
+        def _remove_redundant_startings(lines: list[str]) -> list[str]:
             if not lines:
                 return lines
-            if "For alternative betydninger, se" in lines[0]:
+            unwanted_starts = ["Ikke at forveksle med"]
+            _pop_it: bool = any(unwanted in lines[0] for unwanted in unwanted_starts)
+            if _pop_it:
                 lines.pop(0)
             return lines
 
@@ -254,7 +308,7 @@ class Processor:
 
         text = _remove_html_links(text=text)
         lines = text.split("\n")
-        lines = _remove_alternative_meanings_first_line(lines=lines)
+        lines = _remove_redundant_startings(lines=lines)
         lines = _remove_css_styling(lines=lines)
         lines = _remove_trailing_header(lines=lines)
 
@@ -280,3 +334,7 @@ class Processor:
         """Read a JSONL file."""
         with jsonlines.open(path, mode="r") as reader:
             return list(reader)
+
+    def _missing_data(self, title: str, text: str) -> bool:
+        """Check if the title and text are missing."""
+        return not title or not text

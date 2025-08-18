@@ -44,16 +44,16 @@ from wiki_expanded.processor import Processor
     help="Name of the tokenizer to use.",
 )
 @click.option(
-    "--case-sensitive-titles-links/--no-case-sensitive-titles-links",
+    "--capitalize-titles-and-links/--no-capitalize-titles-and-links",
     default=True,
-    help="Whether to treat titles and links as case sensitive (default: True).",
+    help="Whether to capitalize titles and links (default: True).",
 )
 def main(
     text_dir: Path,
     save_dir: Path,
     max_files: int | None,
     tokenizer_name: str = "google/gemma-7b",
-    case_sensitive_titles_links: bool = True,
+    capitalize_titles_and_links: bool = True,
 ) -> None:
     """Process the raw articles."""
     processor = Processor(
@@ -61,7 +61,7 @@ def main(
         save_dir=save_dir,
         max_files=max_files,
         tokenizer_name=tokenizer_name,
-        case_sensitive_titles_and_links=case_sensitive_titles_links,
+        capitalize_titles_and_links=capitalize_titles_and_links,
     )
     processor.process()
 
