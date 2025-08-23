@@ -48,12 +48,19 @@ from wiki_expanded.processor import Processor
     default=True,
     help="Whether to capitalize titles and links (default: True).",
 )
+@click.option(
+    "--path",
+    default=None,
+    type=click.Path(exists=True, file_okay=True, dir_okay=False, path_type=Path),
+    help="Path to debug a specific wiki file (e.g. data/raw/text/AB/wiki_21).",
+)
 def main(
     text_dir: Path,
     save_dir: Path,
     max_files: int | None,
     tokenizer_name: str = "google/gemma-7b",
     capitalize_titles_and_links: bool = True,
+    path: Path | None = None,
 ) -> None:
     """Process the raw articles."""
     processor = Processor(
@@ -63,7 +70,7 @@ def main(
         tokenizer_name=tokenizer_name,
         capitalize_titles_and_links=capitalize_titles_and_links,
     )
-    processor.process()
+    processor.process(path=path)
 
 
 if __name__ == "__main__":

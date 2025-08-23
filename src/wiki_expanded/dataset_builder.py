@@ -90,21 +90,7 @@ class DatasetBuilder:
                     self.all_links_considered_for_expansion
                     - set(self.link_expansion_count.keys())
                 )
-
-            logger.info(
-                f"Total number of unique expanded links "
-                f"(iteration {iteration}): "
-                f"{len(self.link_expansion_count)}"
-            )
-            logger.info(
-                f"Total number of links expanded "
-                f"(iteration {iteration}): "
-                f"{sum(self.link_expansion_count.values())}"
-            )
-            logger.info(
-                f"Total number of links considered for expansion: "
-                f"{len(self.all_links_considered_for_expansion)}"
-            )
+            self._log_iteration_stats(iteration=iteration)
 
         self._save_link_expansion_count()
         logger.info(f"Done building dataset. Saved {self.dataset_length} samples.")
@@ -139,7 +125,6 @@ class DatasetBuilder:
             if iteration == 1:
                 self._append_sample(sample=sample)
 
-            self.dataset_length += 1
             dataset_done = self.max_dataset_length and (
                 self.dataset_length >= self.max_dataset_length
             )
@@ -167,6 +152,8 @@ class DatasetBuilder:
         """Append a sample to the dataset."""
         with jsonlines.open(self.dataset_path, mode="a") as writer:
             writer.write(sample)
+
+        self.dataset_length += 1
 
     def _save_link_expansion_count(self) -> None:
         """Save the link expansion count to disk."""
@@ -270,8 +257,8 @@ class DatasetBuilder:
         Returns:
             A list of links present in the article.
         """
-        links: list[str] = self.title_to_links[title]
-        links = list(set([link for link in links if link in self.title_to_text]))
+        links: list[str] = list(set(self.title_to_links[title]))
+        links = [link for link in links if link in self.title_to_text]
 
         if self.max_link_expansions:
             links = [
@@ -327,3 +314,19 @@ class DatasetBuilder:
 
         links = [item[0] for item in items]
         return links
+
+    def _log_iteration_stats(self, iteration: int) -> None:
+        logger.info(
+            f"Total number of unique expanded links "
+            f"(iteration {iteration}): "
+            f"{len(self.link_expansion_count)}"
+        )
+        logger.info(
+            f"Total number of links expanded "
+            f"(iteration {iteration}): "
+            f"{sum(self.link_expansion_count.values())}"
+        )
+        logger.info(
+            f"Total number of links considered for expansion: "
+            f"{len(self.all_links_considered_for_expansion)}"
+        )

@@ -41,18 +41,86 @@ class Processor:
             If None, process all files.
         tokenizer_name (str, optional): Name of the tokenizer to use.
             Defaults to "google/gemma-7b".
-        capitalize_titles_and_links (bool): Wether to capitalize titles
+        capitalize_titles_and_links (bool): Whether to capitalize titles
             and links or not.
+        redirects_path (Path): Path to the title redirects file.
     """
 
     PROGRESS_LOG_INTERVAL = 10000
 
-    _LINK_PATTERN = re.compile(r'<a href="([^"]+)">.+?</a>')
+    _HTML_LINK_PATTERN = re.compile(r'<a href="[^"]*">(.*?)</a>')
+    _SQUARE_BRACKET_LINK_PATTERN = re.compile(r"\[\[(.*?)\]\]")
+
+    _EMPTY_SQUARE_BRACKET_PATTERN = re.compile(r"\n\[\]")
+
+    _TEMPLATESTYLES_PATTERN = re.compile(r"<templatestyles.+?>", re.IGNORECASE)
+    _SPOILER_PATTERN = re.compile(
+        r" - \"Handling, afslutning og/eller plot afsløres i det følgende.\"?",
+        re.IGNORECASE,
+    )
+    _REMOVE_PATTERNS = [_TEMPLATESTYLES_PATTERN, _SPOILER_PATTERN]
+
+    # Remove files, images, etc.
+    # Also removes nested files as "[[Fil:Gettysburg national cemetery img
+    # 4164.jpg|thumb|right|[[Gettysburg National Cemetery]]]]"
+    _FILE_PATTERN = re.compile(
+        r"\[\[(Fil|Billede|Image):(?:[^\[\]]|\[\[[^\]]*\]\])*\]\]", re.IGNORECASE
+    )
+    _IMAGE_LABEL = re.compile(r"\{\{Image label.+?\}\}")
+
     _CENTURY_PATTERN = re.compile(r"^\d+\.\s*århundrede f\.Kr\.$", re.IGNORECASE)
     _YEAR_ERNE_PATTERN = re.compile(r"^\d{4}'erne")
     _YEAR_BEFORE_CR_PATTERN = re.compile(r"^\d+\s*f\.Kr\.$")
     _DATE_PATTERN = re.compile(r"^\d{1,2}\.\s+\w+$")
     _ONLY_NUMBERS_PATTERN = re.compile(r"^\d+$")
+    _TITLE_IGNORE_SUB_STRINGS = ["(flertydig)"]
+
+    # Ignore texts that start with these strings
+    _UNWANTED_TEXTS = [
+        "Dette er en , som omdirigerer fra en fejlskrivning",
+        "omdirigeringer med denne skabelon",
+        "omdirigeres hertil. For",
+        "#REDIRECT",
+        "refererer til flere ting:",
+        "har flere betydninger:",
+        "Opslagsordet har også en anden betydning",
+        "kan have flere betydninger:",
+        "kan betyde:",
+        "Der er for få eller ingen i denne artikel",
+        "kan henvise til flere artikler:",
+        "henviser til flere artikler:",
+        "henfører primært til:",
+        "er navnet på flere personer:",
+        "Der er flere personer med",
+        "henvise til flere personer:(flertydig).",
+    ]
+
+    # Pop initial lines if they start with these strings
+    _UNWANTED_FIRST_LINES = [
+        "Ikke at forveksle med",
+        "Denne artikel handler om",
+        "Denne artikel omhandler",
+        "Uddybende artikel:",
+        "Uddybende artikler:",
+        "Hovedartikel:",
+        "For alternative betydninger, se",
+        "Denne artikel bør gennemlæses af en person",
+        "Se også:",
+        "Tekst mangler,",
+        "Indledende runde",
+    ]
+
+    _SECTIONS_TO_IGNORE = [
+        "Noter\n",
+        "Se også\n",
+        "Litteratur\n",
+        "Referencer\n",
+        "Kilder\n",
+        "Eksterne henvisninger\n",
+        "Ekstern henvisning\n",
+        "Yderligere læsning\n",
+        "Kilder og henvisninger\n",
+    ]
 
     def __init__(
         self,
@@ -61,7 +129,7 @@ class Processor:
         max_files: int | None = None,
         tokenizer_name: str = "google/gemma-7b",
         capitalize_titles_and_links: bool = True,
-        redirects_path: Path = Path("data/raw/redirects.json"),  # Add parameter
+        redirects_path: Path = Path("data/raw/redirects.json"),
     ) -> None:
         """Initialize the Processor."""
         self.title_to_links: dict[str, list[str]] = {}
@@ -69,24 +137,38 @@ class Processor:
         self.title_to_tokens: dict[str, list[int]] = {}
         self.link_to_freq: Counter[str] = Counter()
         self.original_title: dict[str, str] = {}
-        self.redirects: dict[str, str] = json.load(open(redirects_path, "r"))
+
+        with open(redirects_path, "r") as f:
+            self.redirects: dict[str, str] = json.load(f)
+
         self.titles_seen: set[str] = set()
         self.articles_processed: int = 0
+        self.max_files: int | None = max_files
+
         self.text_dir: Path = text_dir
         self.save_dir: Path = save_dir
-        self.max_files: int | None = max_files
+
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+
         self.capitalize_titles_and_links: bool = capitalize_titles_and_links
 
-    def process(self) -> None:
-        """Build the five dictionaries."""
-        for path in self.text_dir.glob("*/wiki_*"):
+    def process(self, path: Path | None = None) -> None:
+        """Build the five dictionaries.
+
+        Args:
+            path: Path to a specific wiki file to process. If None, process all files.
+        """
+        paths = [path] if path else self.text_dir.glob("*/wiki_*")
+        for path in paths:
             articles = self._read_jsonl(path=path)
             for article in articles:
                 title, text = (
                     self._make_human_readable(string=article["title"]),
                     self._make_human_readable(string=article["text"]),
                 )
+
+                # if title == "Draculas ring":
+                #     print("aloha")
 
                 self.articles_processed += 1
                 if not self.articles_processed % self.PROGRESS_LOG_INTERVAL:
@@ -108,14 +190,14 @@ class Processor:
                 ):
                     continue
 
-                text_processed = self._process_text(text=text)
+                text_processed: str = self._remove_noise(text=text)
                 if not text_processed:
                     continue
 
+                text_processed = self._to_markdown(text=text_processed, title=title)
+
                 if title in self.titles_seen:
-                    # There are title duplicates (given case insensitivity)
-                    # Prioritize the longer text
-                    # See for example https://da.wikipedia.org/wiki/Usa
+                    # For duplicates, prioritize the longer text
                     old_text_processed = self.title_to_text[title]
                     override: bool = len(text_processed) > len(old_text_processed)
                     if not override:
@@ -198,7 +280,12 @@ class Processor:
             A list of links found in the article.
         """
         text = html.unescape(text)
-        links = list(set(self._LINK_PATTERN.findall(text)))
+        # Extract HTML-style links
+        html_links = self._HTML_LINK_PATTERN.findall(text)
+        # Extract square bracket links and remove the brackets
+        square_bracket_links = self._SQUARE_BRACKET_LINK_PATTERN.findall(text)
+        # Combine both types of links and ignore duplicates
+        links = list(set(html_links) | set(square_bracket_links))
         decoded_links = [urllib.parse.unquote(link) for link in links]
 
         links = [
@@ -213,13 +300,20 @@ class Processor:
 
         if self.capitalize_titles_and_links:
             links = [self._capitalize(link) for link in links]
+
+        links = list(set(links))
         return links
 
     @staticmethod
     def _capitalize(string: str) -> str:
+        """Capitalize the first letter of a string."""
+        if not string:
+            return string
+
         return string[0].upper() + string[1:]
 
     def _ignore_title(self, title: str) -> bool:
+        """Ignore titles based on various criteria."""
         # Ignore links that are too short. Can be articles about a single letter
         if len(title) <= 1:
             return True
@@ -244,75 +338,154 @@ class Processor:
         if self._DATE_PATTERN.match(title):
             return True
 
+        if any(
+            ignore_substring in title
+            for ignore_substring in self._TITLE_IGNORE_SUB_STRINGS
+        ):
+            return True
+
         return False
 
     def _ignore_text(self, text: str) -> bool:
         """Return True if text should be ignored based on unwanted starting lines."""
-        unwanted_starts = [
-            "For alternative betydninger, se",
-            "Dette er en , som omdirigerer fra en fejlskrivning",
-            "omdirigeringer med denne skabelon",
-            "omdirigeres hertil. For",
-            "#REDIRECT",
-            "refererer til flere ting:",
-            "har flere betydninger:",
-            "Opslagsordet har også en anden betydning",
-            "kan have flere betydninger:",
-            "kan betyde:",
-            "Der er for få eller ingen i denne artikel",
-            "kan henvise til flere artikler:",
-            "henfører primært til:",
-        ]
         first_line = text.split("\n", 1)[0]
-        return any(unwanted in first_line for unwanted in unwanted_starts)
+        return any(unwanted in first_line for unwanted in self._UNWANTED_TEXTS)
 
-    @staticmethod
-    def _process_text(text: str) -> str:
-        """Process the text of a Wikipedia article.
+    def _remove_noise(self, text: str) -> str:
+        """Clean the text of a Wikipedia article.
 
         Args:
             text: The text of the Wikipedia article.
 
         Returns:
-            The processed text of the Wikipedia article.
+            The cleaned text of the Wikipedia article.
         """
+
+        def _remove_empty_square_brackets(text: str) -> str:
+            return self._EMPTY_SQUARE_BRACKET_PATTERN.sub("", text)
+
+        def _remove_files(text: str) -> str:
+            return self._FILE_PATTERN.sub("", text)
+
+        def _remove_image_labels(text: str) -> str:
+            return self._IMAGE_LABEL.sub("", text)
 
         def _remove_redundant_startings(lines: list[str]) -> list[str]:
             if not lines:
                 return lines
-            unwanted_starts = ["Ikke at forveksle med"]
-            _pop_it: bool = any(unwanted in lines[0] for unwanted in unwanted_starts)
-            if _pop_it:
-                lines.pop(0)
-            return lines
+
+            for i in range(len(lines)):
+                if not _ignore_line(line=lines[i]):
+                    break
+
+            return lines[i:]
+
+        def _remove_redundant_subsection_startings(lines: list[str]) -> list[str]:
+            ignore_indices = []
+            for i in range(len(lines) - 1):
+                line = lines[i]
+                next_line = lines[i + 1]
+                if line.startswith("##"):
+                    if _ignore_line(line=next_line):
+                        ignore_indices.append(i + 1)
+
+            return [line for i, line in enumerate(lines) if i not in ignore_indices]
+
+        def _ignore_line(line: str) -> bool:
+            _empty_line: bool = not line.strip()
+            _has_unwanted_starting: bool = any(
+                unwanted in line.strip() for unwanted in self._UNWANTED_FIRST_LINES
+            )
+            return _empty_line or _has_unwanted_starting
 
         def _remove_html_links(text: str) -> str:
-            text = re.sub(r'<a href="[^"]*">(.*?)</a>', r"\1", text)
+            text = self._HTML_LINK_PATTERN.sub(r"\1", text)
             return text
 
-        def _remove_css_styling(lines: list[str]) -> list[str]:
-            if not lines:
-                return lines
-            if "<templatestyles" in lines[-1]:
+        def _remove_double_square_bracket_links(text: str) -> str:
+            return self._SQUARE_BRACKET_LINK_PATTERN.sub(r"\1", text)
+
+        def _remove_css_styling(text: str) -> str:
+            """Remove CSS styling from the text.
+
+            Remove `<templatestyles src="Reflist/styles.css" />`.
+            """
+            for pattern in self._REMOVE_PATTERNS:
+                text = pattern.sub("", text)
+            return text
+
+        def _remove_empty_trailing_sections(lines: list[str]) -> list[str]:
+            while lines and (
+                not lines[-1].strip() or lines[-1].strip().startswith("##")
+            ):
                 lines.pop()
             return lines
 
-        def _remove_trailing_header(lines: list[str]) -> list[str]:
-            if not lines:
-                return lines
-            last_section = lines[-1]
-            is_header = len(last_section.split(" ")) <= 2
-            if is_header:
-                lines.pop()
+        def _ignore_redundant_trailing_sections(text: str) -> str:
+            sections = re.split(r"\n## ", text)
+
+            if len(sections) == 1:
+                return text
+
+            for i in range(1, len(sections)):
+                if any(
+                    sections[i].startswith(section_to_ignore)
+                    for section_to_ignore in self._SECTIONS_TO_IGNORE
+                ):
+                    break
+
+            return sections[0] + "\n## " + "\n## ".join(sections[1:i])
+
+        def _ignore_short_lines(lines: list[str]) -> list[str]:
+            return [line for line in lines if len(line.strip()) > 1]
+
+        def _remove_empty_sections(lines: list[str]) -> list[str]:
+            while True:
+                lines_copy = lines.copy()
+                ignore_indices = []
+                for i in range(len(lines) - 1):
+                    line = lines[i]
+                    next_line = lines[i + 1]
+                    line_hash_tag_count = line.split(" ")[0].count("#")
+                    next_line_hash_tag_count = next_line.split(" ")[0].count("#")
+                    if not (line_hash_tag_count and next_line_hash_tag_count):
+                        continue
+
+                    if next_line_hash_tag_count <= line_hash_tag_count:
+                        ignore_indices.append(i)
+                lines = [
+                    line for i, line in enumerate(lines) if i not in ignore_indices
+                ]
+                if lines_copy == lines:
+                    break
             return lines
 
+        text = _ignore_redundant_trailing_sections(text=text)
+        text = _remove_empty_square_brackets(text=text)
+        text = _remove_css_styling(text=text)
+        text = _remove_files(text=text)
+        text = _remove_image_labels(text=text)
         text = _remove_html_links(text=text)
+        text = _remove_double_square_bracket_links(text=text)
+
         lines = text.split("\n")
+        lines = _ignore_short_lines(lines=lines)
+        lines = _remove_redundant_subsection_startings(lines=lines)
         lines = _remove_redundant_startings(lines=lines)
-        lines = _remove_css_styling(lines=lines)
-        lines = _remove_trailing_header(lines=lines)
+        lines = _remove_empty_trailing_sections(lines=lines)
+        lines = _remove_empty_sections(lines=lines)
 
         text = "\n".join(lines)
+        return text
+
+    def _to_markdown(self, text: str, title: str) -> str:
+        """Convert the text to markdown.
+
+        Include the title as a markdown header
+        Change wiki markup sections `==` to markdown headers `##`
+        """
+        text = re.sub(r"\n+", "\n", text)
+        text = f"# {title}\n\n{text}"
         return text
 
     @staticmethod
