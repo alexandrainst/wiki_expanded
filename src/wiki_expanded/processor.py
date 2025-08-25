@@ -116,6 +116,7 @@ class Processor:
         "Litteratur\n",
         "Referencer\n",
         "Kilder\n",
+        "Kilde\n",
         "Eksterne henvisninger\n",
         "Ekstern henvisning\n",
         "Yderligere læsning\n",
