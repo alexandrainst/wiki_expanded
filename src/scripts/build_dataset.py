@@ -33,10 +33,22 @@ from wiki_expanded.dataset_builder import DatasetBuilder
     help="Maximum number of samples in the expanded dataset. If None, use all.",
 )
 @click.option(
-    "--max-link-expansions",
+    "--max-link-expansions-local",
     default=None,
     type=int,
-    help="Maximum number of times a link can be expanded. If None, no limit.",
+    help=(
+        "Maximum number of links that can be expanded for a single sample. "
+        "If None, no limit."
+    ),
+)
+@click.option(
+    "--max-link-expansions-global",
+    default=None,
+    type=int,
+    help=(
+        "Maximum number of times a link can be expanded across all samples. "
+        "If None, no limit."
+    ),
 )
 @click.option(
     "--include-strategy",
@@ -55,7 +67,8 @@ def main(
     num_tokens_threshold: int,
     save_dir: Path,
     max_dataset_length: int | None,
-    max_link_expansions: int | None = None,
+    max_link_expansions_local: int | None = None,
+    max_link_expansions_global: int | None = None,
     include_strategy: str = "prepend",
     ignore_short_samples: bool = False,
 ) -> None:
@@ -65,7 +78,8 @@ def main(
         num_tokens_threshold=num_tokens_threshold,
         save_dir=save_dir,
         max_dataset_length=max_dataset_length,
-        max_link_expansions=max_link_expansions,
+        max_link_expansions_local=max_link_expansions_local,
+        max_link_expansions_global=max_link_expansions_global,
         include_strategy=include_strategy,
         ignore_short_samples=ignore_short_samples,
     )

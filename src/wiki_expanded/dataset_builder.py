@@ -31,8 +31,10 @@ class DatasetBuilder:
             this many tokens long.
         max_dataset_length (int, optional): The maximum number of samples in the
             expanded dataset. If None, use all.
-        max_link_expansions (int, optional): The maximum number of times a link can be
-            expanded. If None, no limit.
+        max_link_expansions_local (int, optional): The maximum number of links
+            that can be expanded for a single sample. If None, no limit.
+        max_link_expansions_global (int, optional): The maximum number of times
+            a link can be expanded across all samples. If None, no limit.
         include_strategy (str, optional): The strategy to use for including the link
             text in the expanded text. If "prepend", the link text is prepended to the
             text. If "append", the link text is appended to the text.
@@ -48,7 +50,8 @@ class DatasetBuilder:
         save_dir: Path,
         num_tokens_threshold: int,
         max_dataset_length: int | None = None,
-        max_link_expansions: int | None = None,
+        max_link_expansions_local: int | None = None,
+        max_link_expansions_global: int | None = None,
         include_strategy: str = "prepend",
         ignore_short_samples: bool = False,
     ) -> None:
@@ -66,7 +69,9 @@ class DatasetBuilder:
         self.files_expanded: int = 0
         self.dataset_length: int = 0
         self.max_dataset_length: int | None = max_dataset_length
-        self.max_link_expansions: int | None = max_link_expansions
+        self.max_link_expansions_local: int | None = max_link_expansions_local
+        self.max_link_expansions_global: int | None = max_link_expansions_global
+
         self.include_strategy: str = include_strategy
         self.ignore_short_samples: bool = ignore_short_samples
 
@@ -210,7 +215,10 @@ class DatasetBuilder:
         current_tokens: int = self.title_to_num_tokens[title]
         n_links_expanded: int = 0
         links_expanded: list[str] = []
-        while current_tokens < self.num_tokens_threshold:
+        while current_tokens < self.num_tokens_threshold and (
+            self.max_link_expansions_local is None
+            or n_links_expanded < self.max_link_expansions_local
+        ):
             if not links:
                 break
             link = links.pop()
@@ -260,11 +268,11 @@ class DatasetBuilder:
         links: list[str] = list(set(self.title_to_links[title]))
         links = [link for link in links if link in self.title_to_text]
 
-        if self.max_link_expansions:
+        if self.max_link_expansions_global:
             links = [
                 link
                 for link in links
-                if self.link_expansion_count[link] < self.max_link_expansions
+                if self.link_expansion_count[link] < self.max_link_expansions_global
             ]
 
         links = self._prioritize_links(links=links)
