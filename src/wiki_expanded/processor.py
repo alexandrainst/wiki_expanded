@@ -159,7 +159,7 @@ class Processor:
         Args:
             path: Path to a specific wiki file to process. If None, process all files.
         """
-        paths = [path] if path else self.text_dir.glob("*/wiki_*")
+        paths: list[Path] = [path] if path else list(self.text_dir.glob("*/wiki_*"))
         for path in paths:
             articles = self._read_jsonl(path=path)
             for article in articles:
@@ -167,9 +167,6 @@ class Processor:
                     self._make_human_readable(string=article["title"]),
                     self._make_human_readable(string=article["text"]),
                 )
-
-                # if title == "Draculas ring":
-                #     print("aloha")
 
                 self.articles_processed += 1
                 if not self.articles_processed % self.PROGRESS_LOG_INTERVAL:
@@ -349,8 +346,10 @@ class Processor:
 
     def _ignore_text(self, text: str) -> bool:
         """Return True if text should be ignored based on unwanted starting lines."""
-        first_line = text.split("\n", 1)[0]
-        return any(unwanted in first_line for unwanted in self._UNWANTED_TEXTS)
+        lines = text.split("\n", 3)[:3]
+        return any(
+            any(unwanted in line for unwanted in self._UNWANTED_TEXTS) for line in lines
+        )
 
     def _remove_noise(self, text: str) -> str:
         """Clean the text of a Wikipedia article.
@@ -486,11 +485,25 @@ class Processor:
         Change wiki markup sections `==` to markdown headers `##`
         """
         text = re.sub(r"\n+", "\n", text)
+        text = self._add_newlines_to_headers(text=text)
         text = f"# {title}\n\n{text}"
+        # Replace 3 or more consecutive newlines with just two newlines
+        text = re.sub(r"\n{3,}", "\n\n", text)
         return text
 
-    @staticmethod
-    def _make_human_readable(string: str) -> str:
+    def _add_newlines_to_headers(self, text: str) -> str:
+        """Add newlines to headers."""
+        lines = text.split("\n")
+        new_lines = []
+        for i in range(len(lines)):
+            if lines[i].startswith("#"):
+                line = f"\n{lines[i]}\n"
+                new_lines.append(line)
+            else:
+                new_lines.append(lines[i])
+        return "\n".join(new_lines)
+
+    def _make_human_readable(self, string: str) -> str:
         """Make a string human readable.
 
         Args:
@@ -501,7 +514,13 @@ class Processor:
         """
         string = html.unescape(string)
         string = urllib.parse.unquote(string)
+        string = self.fix_malformed_html_entities(text=string)
         return string
+
+    def fix_malformed_html_entities(self, text: str) -> str:
+        """Fix malformed HTML entities."""
+        text = text.replace("amp;", "")
+        return text
 
     @staticmethod
     def _read_jsonl(path: Path) -> list[dict[str, Any]]:
