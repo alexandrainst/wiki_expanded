@@ -71,7 +71,6 @@ class Processor:
                 continue
 
             text = f"# {article['title']}\n\n{plain_text}"
-            self.article = article
             title = article["title"]
             links = self._get_links(article=article)
             tokens = self._tokenize_text(text=text)
