@@ -1,14 +1,10 @@
-"""Build 5 dictionaries that will be used to construct the expanded Wikipedia dataset.
+"""Build JSON files that will be used to construct the expanded Wikipedia dataset.
 
-1. `data/processed/title_to_text.json`: Maps each article title to its text.
-2. `data/processed/title_to_links.json`: Maps each article title to
-    the links found in the article.
-3. `data/processed/link_to_freq.json`: Maps each link to the number
-    of articles it appears in.
-4. `data/processed/title_lower_to_original.json`: Maps each lowercase
-    title to the original title.
-5. `data/processed/title_to_tokens.json`: Maps each article title to
-    its tokenized content.
+Builds the following JSON files:
+    - title_to_text.json: Article title -> Article text
+    - title_to_links.json: Article title -> List of outgoing links
+    - link_to_freq.json: Link -> Number of articles it appears in
+    - title_to_tokens.json: Article title -> Token IDs
 
 Usage:
 >>> python src/scripts/process.py --jsonl-file="dawiki_pages.jsonl" --language="da"
