@@ -36,9 +36,8 @@ class Processor:
     def __init__(
         self,
         save_dir: Path,
-        max_files: int | None = None,
         tokenizer_name: str = "google/gemma-7b",
-        language: str = "da",
+        max_files: int | None = None,
     ) -> None:
         """Initialize the Processor."""
         self.title_to_links: dict[str, list[str]] = {}
@@ -53,7 +52,6 @@ class Processor:
         self.save_dir: Path = save_dir
 
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        self.language: str = language
 
     def process(self, jsonl_file: Path) -> None:
         """Build dictionaries used for the expanded Wikipedia dataset.
