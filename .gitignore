@@ -114,5 +114,8 @@ models/*
 # Mkdocs compiled documentation
 site/
 
-# Wikipedia dumps
+# Data files
 *.bz2
+*.json
+*.jsonl
+*.xml
