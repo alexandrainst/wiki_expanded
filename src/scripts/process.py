@@ -49,18 +49,24 @@ from wiki_expanded.processor import Processor
     help="Whether to capitalize titles and links (default: True).",
 )
 @click.option(
-    "--path",
-    default=None,
+    "--jsonl-file",
     type=click.Path(exists=True, file_okay=True, dir_okay=False, path_type=Path),
-    help="Path to debug a specific wiki file (e.g. data/raw/text/AB/wiki_21).",
+    help="Path to the JSONL file with the Wikipedia articles to process.",
+)
+@click.option(
+    "--language",
+    default="da",
+    type=click.Choice(["da", "en"]),
+    help="Language code for the Wikipedia articles (da=Danish, en=English).",
 )
 def main(
     text_dir: Path,
     save_dir: Path,
+    jsonl_file: Path,
     max_files: int | None,
     tokenizer_name: str = "google/gemma-7b",
     capitalize_titles_and_links: bool = True,
-    path: Path | None = None,
+    language: str = "da",
 ) -> None:
     """Process the raw articles."""
     processor = Processor(
@@ -69,8 +75,9 @@ def main(
         max_files=max_files,
         tokenizer_name=tokenizer_name,
         capitalize_titles_and_links=capitalize_titles_and_links,
+        language=language,
     )
-    processor.process(path=path)
+    processor.process(jsonl_file=jsonl_file)
 
 
 if __name__ == "__main__":

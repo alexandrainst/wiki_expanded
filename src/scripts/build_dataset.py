@@ -15,10 +15,21 @@ from wiki_expanded.dataset_builder import DatasetBuilder
     help="Directory containing processed data.",
 )
 @click.option(
-    "--num-tokens-threshold",
-    default=10000,
+    "--min-tokens",
+    default=0,
     type=int,
-    help="Stop expanding links when the text is at least this many tokens long.",
+    help=(
+        "Minimum number of tokens required for a sample to be included in the dataset."
+    ),
+)
+@click.option(
+    "--max-tokens",
+    default=None,
+    type=int,
+    help=(
+        "Stop expanding links when the text reaches this many tokens. "
+        "If None, no upper limit."
+    ),
 )
 @click.option(
     "--save-dir",
@@ -56,32 +67,26 @@ from wiki_expanded.dataset_builder import DatasetBuilder
     type=click.Choice(["prepend", "append"], case_sensitive=False),
     help="Strategy for how to include link text.",
 )
-@click.option(
-    "--ignore-short-samples",
-    default=False,
-    type=bool,
-    help="Ignore samples with fewer than `num_tokens_threshold` tokens.",
-)
 def main(
     processed_dir: Path,
-    num_tokens_threshold: int,
+    min_tokens: int,
+    max_tokens: int | None,
     save_dir: Path,
     max_dataset_length: int | None,
     max_link_expansions_local: int | None = None,
     max_link_expansions_global: int | None = None,
     include_strategy: str = "prepend",
-    ignore_short_samples: bool = False,
 ) -> None:
     """Build the expanded Wikipedia dataset."""
     builder = DatasetBuilder(
         processed_dir=processed_dir,
-        num_tokens_threshold=num_tokens_threshold,
+        min_tokens=min_tokens,
+        max_tokens=max_tokens,
         save_dir=save_dir,
         max_dataset_length=max_dataset_length,
         max_link_expansions_local=max_link_expansions_local,
         max_link_expansions_global=max_link_expansions_global,
         include_strategy=include_strategy,
-        ignore_short_samples=ignore_short_samples,
     )
     builder.build_expanded_dataset()
 

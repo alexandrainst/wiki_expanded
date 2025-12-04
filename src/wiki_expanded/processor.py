@@ -8,7 +8,7 @@ import re
 import urllib.parse
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import jsonlines
 from transformers import AutoTokenizer
@@ -22,6 +22,9 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+BULLET_POINT_LIST_PLACEHOLDER = "<bullet_point_list_placeholder>"
+QUOTE = {"da": "citat", "en": "quote"}
 
 
 class Processor:
@@ -44,6 +47,8 @@ class Processor:
         capitalize_titles_and_links (bool): Whether to capitalize titles
             and links or not.
         redirects_path (Path): Path to the title redirects file.
+        language (str): Language code for the Wikipedia articles.
+            Use "da" for Danish or "en" for English.
     """
 
     PROGRESS_LOG_INTERVAL = 10000
@@ -131,6 +136,7 @@ class Processor:
         tokenizer_name: str = "google/gemma-7b",
         capitalize_titles_and_links: bool = True,
         redirects_path: Path = Path("data/raw/redirects.json"),
+        language: str = "da",
     ) -> None:
         """Initialize the Processor."""
         self.title_to_links: dict[str, list[str]] = {}
@@ -152,84 +158,73 @@ class Processor:
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
 
         self.capitalize_titles_and_links: bool = capitalize_titles_and_links
+        self.language: str = language
 
-    def process(self, path: Path | None = None) -> None:
-        """Build the five dictionaries.
+    def process(self, jsonl_file: Path) -> None:
+        """Build dictionaries used for the expanded Wikipedia dataset.
 
         Args:
-            path: Path to a specific wiki file to process. If None, process all files.
+            jsonl_file: Path to a JSONL file containing the Wikipedia
+                articles to process.
         """
-        paths: list[Path] = [path] if path else list(self.text_dir.glob("*/wiki_*"))
-        for path in paths:
-            articles = self._read_jsonl(path=path)
-            for article in articles:
-                title, text = (
-                    self._make_human_readable(string=article["title"]),
-                    self._make_human_readable(string=article["text"]),
-                )
+        for i, article in enumerate(self._stream_jsonl(jsonl_file=jsonl_file)):
+            if not i % self.PROGRESS_LOG_INTERVAL:
+                logger.info(f"Processed {i} articles")
 
-                self.articles_processed += 1
-                if not self.articles_processed % self.PROGRESS_LOG_INTERVAL:
-                    logger.info(f"Processed {self.articles_processed} articles.")
+            text = article["plaintext"].strip()
+            if not text:
+                continue
 
-                original_title = title
-                title = (
-                    self._capitalize(title)
-                    if self.capitalize_titles_and_links
-                    else title
-                )
+            self.article = article
+            title = article["title"]
+            links = self._get_links(article=article)
+            tokens = self._tokenize_text(text=text)
+            self._update_dictionaries(
+                title=title, text=text, links=links, tokens=tokens
+            )
 
-                title = self.redirects[title] if title in self.redirects else title
+            assert title not in self.titles_seen, f"Duplicate title: {title}"
 
-                if (
-                    self._missing_data(title=title, text=text)
-                    or self._ignore_title(title=title)
-                    or self._ignore_text(text=text)
-                ):
-                    continue
+            self.titles_seen.add(title)
+            self.articles_processed += 1
 
-                text_processed: str = self._remove_noise(text=text)
-                if not text_processed:
-                    continue
-
-                text_processed = self._to_markdown(text=text_processed, title=title)
-
-                if title in self.titles_seen:
-                    # For duplicates, prioritize the longer text
-                    old_text_processed = self.title_to_text[title]
-                    override: bool = len(text_processed) > len(old_text_processed)
-                    if not override:
-                        continue
-
-                    logger.info(
-                        f"Overriding '{self.original_title[title]}' with '{title}'.\n"
-                        f"Previous text head: {old_text_processed[:100]!r}\n"
-                        f"New text head:      {text_processed[:100]!r}"
-                    )
-                    # Before overriding, decrement the link counts from
-                    # previous article/title
-                    for link in self.title_to_links[title]:
-                        self.link_to_freq[link] -= 1
-
-                self.titles_seen.add(title)
-
-                self.original_title[title] = original_title
-
-                links = self._extract_links(text=text)
-                self.title_to_links[title] = links
-                self.link_to_freq.update(links)
-
-                self.title_to_text[title] = text_processed
-
-                tokens = self._tokenize_text(text=text_processed)
-                self.title_to_tokens[title] = tokens
-
-                if self.max_files and self.articles_processed >= self.max_files:
-                    self._save_to_disk()
-                    return
+            if self.max_files and self.articles_processed >= self.max_files:
+                self._save_to_disk()
+                return
 
         self._save_to_disk()
         logger.info(f"Done processing {self.articles_processed} articles.")
+
+    def _update_dictionaries(
+        self, title: str, text: str, links: list[str], tokens: list[int]
+    ) -> None:
+        """Update dictionaries used to build the expanded dataset."""
+        self.title_to_links[title] = links
+        self.link_to_freq.update(links)
+        self.title_to_text[title] = text
+        self.title_to_tokens[title] = tokens
+
+    @staticmethod
+    def _get_links(article: dict[str, Any]) -> list[str]:
+        """Get the links of a Wikipedia article."""
+        links: set[str] = set()
+
+        for section in article["sections"]:
+            if "paragraphs" not in section:
+                continue
+
+            for paragraph in section["paragraphs"]:
+                if "sentences" not in paragraph:
+                    continue
+
+                for sentence in paragraph["sentences"]:
+                    if "links" not in sentence:
+                        continue
+
+                    for link in sentence["links"]:
+                        if link["type"] == "internal":
+                            links.add(link["page"])
+        return list(links)
 
     def _tokenize_text(self, text: str) -> list[int]:
         """Tokenize the text using the configured tokenizer.
@@ -282,6 +277,7 @@ class Processor:
         html_links = self._HTML_LINK_PATTERN.findall(text)
         # Extract square bracket links and remove the brackets
         square_bracket_links = self._SQUARE_BRACKET_LINK_PATTERN.findall(text)
+        square_bracket_links = [link.split("|")[0] for link in square_bracket_links]
         # Combine both types of links and ignore duplicates
         links = list(set(html_links) | set(square_bracket_links))
         decoded_links = [urllib.parse.unquote(link) for link in links]
@@ -523,6 +519,13 @@ class Processor:
         return text
 
     @staticmethod
+    def _stream_jsonl(jsonl_file: Path) -> Iterator[dict[str, Any]]:
+        """Stream articles from a JSONL file one by one."""
+        with jsonlines.open(jsonl_file, mode="r") as reader:
+            for article in reader:
+                yield article
+
+    @staticmethod
     def _read_jsonl(path: Path) -> list[dict[str, Any]]:
         """Read a JSONL file."""
         with jsonlines.open(path, mode="r") as reader:
@@ -531,3 +534,9 @@ class Processor:
     def _missing_data(self, title: str, text: str) -> bool:
         """Check if the title and text are missing."""
         return not title or not text
+
+
+def save(data: dict, filepath: Path = Path("tmp.json")) -> None:
+    """Save a dictionary to a JSON file."""
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
