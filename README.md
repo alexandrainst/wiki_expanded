@@ -37,7 +37,6 @@ mongod --config /opt/homebrew/etc/mongod.conf
 #### 2a. Set language code
 ```bash
 # Choose your target language (e.g., "da" for Danish, "en" for English)
-# See https://dumps.wikimedia.org/ for available languages
 LANG="da"
 ```
 
@@ -73,7 +72,7 @@ mongoexport --db="${LANG}wiki" --collection=pages --out="${LANG}wiki_pages.jsonl
 Build five JSON files that will be used to construct the expanded Wikipedia dataset.
 
 ```bash
-python src/scripts/process.py
+python src/scripts/process.py --jsonl-file="dawiki_pages.jsonl"
 ```
 
 ### 4️⃣ Build the expanded Wikipedia dataset
