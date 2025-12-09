@@ -70,13 +70,15 @@ class Processor:
 
             text = f"# {article['title']}\n\n{plain_text}"
             title = article["title"]
+
+            # Check for duplicates BEFORE updating dictionaries to avoid data corruption
+            assert title not in self.titles_seen, f"Duplicate title: {title}"
+
             links = self._get_links(article=article)
             tokens = self._tokenize_text(text=text)
             self._update_dictionaries(
                 title=title, text=text, links=links, tokens=tokens
             )
-
-            assert title not in self.titles_seen, f"Duplicate title: {title}"
 
             self.titles_seen.add(title)
             self.articles_processed += 1

@@ -1,5 +1,15 @@
-"""Build the expanded Wikipedia dataset."""
+"""Build the expanded Wikipedia dataset.
 
+Usage:
+>>> python src/scripts/build_dataset.py \
+        --processed-dir="data/processed/da" \
+        --min-tokens=32768 \
+        --max-tokens=65536 \
+        --max-link-expansions-global=10 \
+        --include-strategy="prepend"
+"""
+
+import sys
 from pathlib import Path
 
 import click
@@ -11,7 +21,7 @@ from wiki_expanded.dataset_builder import DatasetBuilder
 @click.option(
     "--processed-dir",
     default="data/processed",
-    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+    type=click.Path(exists=False, file_okay=False, dir_okay=True, path_type=Path),
     help="Directory containing processed data.",
 )
 @click.option(
@@ -28,7 +38,7 @@ from wiki_expanded.dataset_builder import DatasetBuilder
     type=int,
     help=(
         "Stop expanding links when the text reaches this many tokens. "
-        "If None, no upper limit."
+        "If not specified, no upper limit is applied."
     ),
 )
 @click.option(
@@ -78,6 +88,18 @@ def main(
     include_strategy: str = "prepend",
 ) -> None:
     """Build the expanded Wikipedia dataset."""
+    if not processed_dir.exists():
+        raise FileNotFoundError(
+            (
+                f"Processed directory '{processed_dir}' not found. "
+                "Run: `python src/scripts/process.py`"
+            )
+        )
+
+    # Convert None to sys.maxsize for no upper limit
+    if max_tokens is None:
+        max_tokens = sys.maxsize
+
     builder = DatasetBuilder(
         processed_dir=processed_dir,
         min_tokens=min_tokens,

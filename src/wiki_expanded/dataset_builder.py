@@ -3,6 +3,7 @@
 import datetime
 import json
 import logging
+import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -29,8 +30,8 @@ class DatasetBuilder:
         save_dir (Path): The path to save the expanded dataset.
         min_tokens (int): Minimum number of tokens required for a sample to be
             included in the dataset. Defaults to 0.
-        max_tokens (int, optional): Stop expanding links when the text reaches
-            this many tokens. If None, no upper limit.
+        max_tokens (int): Stop expanding links when the text reaches this many
+            tokens. Defaults to sys.maxsize (effectively no limit).
         max_dataset_length (int, optional): The maximum number of samples in the
             expanded dataset. If None, use all.
         max_link_expansions_local (int, optional): The maximum number of links
@@ -49,7 +50,7 @@ class DatasetBuilder:
         processed_dir: Path,
         save_dir: Path,
         min_tokens: int = 0,
-        max_tokens: int | None = None,
+        max_tokens: int = sys.maxsize,
         max_dataset_length: int | None = None,
         max_link_expansions_local: int | None = None,
         max_link_expansions_global: int | None = None,
@@ -62,7 +63,7 @@ class DatasetBuilder:
         self.title_to_tokens: dict[str, list[int]] = {}
         self.title_to_num_tokens: dict[str, int] = {}
         self.min_tokens: int = min_tokens
-        self.max_tokens: int | None = max_tokens
+        self.max_tokens: int = max_tokens
         self.save_dir: Path = save_dir / datetime.datetime.now().strftime(
             "%Y-%m-%d-%H-%M-%S"
         )
@@ -212,7 +213,7 @@ class DatasetBuilder:
         current_tokens: int = self.title_to_num_tokens[title]
         n_links_expanded: int = 0
         links_expanded: list[str] = []
-        while (self.max_tokens is None or current_tokens < self.max_tokens) and (
+        while current_tokens < self.max_tokens and (
             self.max_link_expansions_local is None
             or n_links_expanded < self.max_link_expansions_local
         ):
