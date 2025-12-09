@@ -17,33 +17,69 @@ Long context Wikipedia dataset constructed by expanding links in Wikipedia artic
 make install
 ```
 
-### WikiExtractor
+## Extract data from a Wikipedia dump
 
-We use the [WikiExtractor](https://github.com/attardi/wikiextractor) module to extract data from a Wikipedia dump.
+We use [Dumpster Dive](https://github.com/dumpster-dive/dumpster-dive) to extract the data from a Wikipedia dump.
+
+### 1️⃣ Install dependencies
+
+Install [nodejs](https://nodejs.org/en/) (at least `v6`), [mongodb](https://docs.mongodb.com/manual/installation/) (at least `v3`)
 
 ```bash
-cd .. && git clone https://github.com/alexandrainst/wikiextractor && \
-cd wiki_expanded
+# install this script
+npm install -g dumpster-dive # (that gives you the global command `dumpster`)
+# start mongo up
+mongod --config /opt/homebrew/etc/mongod.conf
 ```
 
-## Usage
+### 2️⃣ Prepare the Wikipedia dump
 
-1. Extract data from a [Wikipedia dump](https://dumps.wikimedia.org/dawiki/latest/):
-
+#### 2a. Set language code
 ```bash
-(cd ../wikiextractor && python -m wikiextractor.WikiExtractor ../wiki_expanded/dawiki-latest-pages-articles.xml.bz2 --links --json --output=../wiki_expanded/data/raw/text)
+# Choose your target language (e.g., "da" for Danish, "en" for English)
+LANG="da"
 ```
 
-2. Process the extracted data to build five json files that will be used to construct the expanded Wikipedia dataset.
-
+#### 2b. Download Wikipedia dump
 ```bash
-python src/scripts/process.py
+# Download the latest Wikipedia dump for your chosen language
+# Note: This can be several GB and may take time depending on your connection
+wget "https://dumps.wikimedia.org/${LANG}wiki/latest/${LANG}wiki-latest-pages-articles.xml.bz2"
 ```
 
-3. Build the expanded Wikipedia dataset.
+#### 2c. Extract the dump
+```bash
+# Unzip the compressed XML file
+bzip2 -d "./${LANG}wiki-latest-pages-articles.xml.bz2"
+```
+
+#### 2d. Load data into MongoDB
+```bash
+# Parse Wikipedia XML and load into MongoDB (ensure MongoDB is running)
+dumpster "./${LANG}wiki-latest-pages-articles.xml" \
+  --infoboxes=false --citations=false --categories=false --images=false --links=true --plaintext=true
+```
+
+> **Note:** This step requires MongoDB to be running. Start it with the command from step 1.
+
+#### 2e. Export processed data
+```bash
+# Export the processed data from MongoDB to JSON
+mongoexport --db="${LANG}wiki" --collection=pages --out="${LANG}wiki_pages.jsonl"
+```
+
+### 3️⃣ Process the extracted data
+Build five JSON files that will be used to construct the expanded Wikipedia dataset.
 
 ```bash
-python src/scripts/build_dataset.py --ignore-short-samples=True --include-strategy=prepend --max-link-expansions=10 --num-tokens-threshold=15000
+python src/scripts/process.py --jsonl-file="dawiki_pages.jsonl"
+```
+
+### 4️⃣ Build the expanded Wikipedia dataset
+Build the expanded Wikipedia dataset by expanding links in the articles.
+
+```bash
+python src/scripts/build_dataset.py --include-strategy=prepend --max-link-expansions=10 --num-tokens-threshold=15000
 ```
 
 ______________________________________________________________________
