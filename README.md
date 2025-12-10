@@ -57,7 +57,7 @@ bzip2 -d "./${LANG}wiki-latest-pages-articles.xml.bz2"
 ```bash
 # Parse Wikipedia XML and load into MongoDB (ensure MongoDB is running)
 dumpster "./${LANG}wiki-latest-pages-articles.xml" \
-  --infoboxes=false --citations=false --categories=false --images=false --links=true --plaintext=true
+  --infoboxes=false --citations=false --categories=false --images=false --links=true --plaintext=true --db_url "mongodb://127.0.0.1:27017" --db "${LANG}wiki"
 ```
 
 > **Note:** This step requires MongoDB to be running. Start it with the command from step 1.
