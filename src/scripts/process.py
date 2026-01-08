@@ -4,7 +4,7 @@ Builds the following JSON files:
     - title_to_text.json: Article title -> Article text
     - title_to_links.json: Article title -> List of outgoing links
     - link_to_freq.json: Link -> Number of articles it appears in
-    - title_to_tokens.json: Article title -> Token IDs
+    - title_to_num_tokens.json: Article title -> Number of tokens in the article
 
 Usage:
 >>> python src/scripts/process.py --jsonl-file="dawiki_pages.jsonl"
