@@ -72,7 +72,7 @@ mongoexport --db="${LANG}wiki" --collection=pages --out="${LANG}wiki_pages.jsonl
 Build five JSON files that will be used to construct the expanded Wikipedia dataset.
 
 ```bash
-python src/scripts/process.py --jsonl-file="dawiki_pages.jsonl"
+python src/scripts/process.py --jsonl-file="${LANG}wiki_pages.jsonl"
 ```
 
 ### 4️⃣ Build the expanded Wikipedia dataset
