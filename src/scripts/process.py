@@ -1,10 +1,10 @@
 """Build JSON files that will be used to construct the expanded Wikipedia dataset.
 
-Builds the following JSON files:
-    - title_to_text.json: Article title -> Article text
+Builds the following:
+    - articles.sqlite3: SQLite DB with article title and text
     - title_to_links.json: Article title -> List of outgoing links
     - link_to_freq.json: Link -> Number of articles it appears in
-    - title_to_tokens.json: Article title -> Token IDs
+    - title_to_num_tokens.json: Article title -> Number of tokens in the article
     - title_to_url.json: Article title -> Wikipedia URL based on pageID
 
 Usage:

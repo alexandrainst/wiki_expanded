@@ -3,10 +3,11 @@
 import datetime
 import json
 import logging
+import sqlite3
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import jsonlines
 
@@ -58,9 +59,7 @@ class DatasetBuilder:
     ) -> None:
         """Initialize the DatasetBuilder."""
         self.title_to_links: dict[str, list[str]] = {}
-        self.title_to_text: dict[str, str] = {}
         self.link_to_freq: Counter[str] = Counter()
-        self.title_to_tokens: dict[str, list[int]] = {}
         self.title_to_num_tokens: dict[str, int] = {}
         self.min_tokens: int = min_tokens
         self.max_tokens: int = max_tokens
@@ -83,25 +82,34 @@ class DatasetBuilder:
         self.link_expansion_path: Path = (
             self.save_dir / FILE_NAMES["link_expansion_count"]
         )
+
+        self._articles_db_conn: sqlite3.Connection | None = None
+
         self._read_processed_data(processed_dir=processed_dir)
 
     def build_expanded_dataset(self) -> None:
         """Build the expanded Wikipedia dataset."""
-        for iteration in range(2):
-            self._init_dataset()
-            self._build_dataset(iteration=iteration)
+        try:
+            for iteration in range(2):
+                self._init_dataset()
+                self._build_dataset(iteration=iteration)
 
-            if iteration == 0:
-                self.links_considered_in_first_iteration_but_not_expanded = (
-                    self.all_links_considered_for_expansion
-                    - set(self.link_expansion_count.keys())
-                )
-            self._log_iteration_stats(iteration=iteration)
+                if iteration == 0:
+                    self.links_considered_in_first_iteration_but_not_expanded = (
+                        self.all_links_considered_for_expansion
+                        - set(self.link_expansion_count.keys())
+                    )
+                self._log_iteration_stats(iteration=iteration)
 
-        self._save_link_expansion_count()
-        logger.info(f"Done building dataset. Saved {self.dataset_length} samples.")
+            self._save_link_expansion_count()
+            logger.info(f"Done building dataset. Saved {self.dataset_length} samples.")
+        finally:
+            if self._articles_db_conn is not None:
+                self._articles_db_conn.close()
+                self._articles_db_conn = None
 
     def _init_dataset(self) -> None:
+        """Initialise the dataset."""
         self.link_expansion_count = Counter()
         self.files_expanded = 0
         self.dataset_length = 0
@@ -111,10 +119,11 @@ class DatasetBuilder:
             self.dataset_path.touch()
 
     def _build_dataset(self, iteration: int) -> None:
-        n_titles = len(self.title_to_text)
-        for i, (title, text) in enumerate(self.title_to_text.items()):
+        """Build the dataset."""
+        n_titles = self._get_n_titles()
+        for i, (title, text) in enumerate(self._iter_titles_and_texts()):
             if not i % self.PROGRESS_LOG_INTERVAL:
-                logger.info(f"Processed {i}/{n_titles} titles")
+                logger.info("Processed %d/%d titles", i, n_titles)
 
             sample = self._expand(title=title, text=text)
             if not self.min_tokens <= sample["n_tokens"] <= self.max_tokens:
@@ -134,6 +143,26 @@ class DatasetBuilder:
             if dataset_done:
                 break
 
+    def _iter_titles_and_texts(self) -> Iterator[tuple[str, str]]:
+        """Yield (title, text) pairs from either SQLite or in-memory dict."""
+        if self._articles_db_conn is None:
+            msg = "articles_db connection is not initialised."
+            raise RuntimeError(msg)
+
+        cursor = self._articles_db_conn.execute("SELECT title, text FROM articles")
+        for title, text in cursor:
+            yield str(title), str(text)
+
+    def _get_n_titles(self) -> int:
+        """Return the number of titles available for expansion."""
+        if self._articles_db_conn is None:
+            msg = "articles_db connection is not initialised."
+            raise RuntimeError(msg)
+
+        cursor = self._articles_db_conn.execute("SELECT COUNT(*) FROM articles")
+        (count,) = cursor.fetchone()
+        return int(count)
+
     def _find_links_not_expanded_in_iteration(self) -> set[str]:
         """Find links that were not expanded in the first iteration.
 
@@ -142,7 +171,7 @@ class DatasetBuilder:
         links = [
             link
             for link in self.link_to_freq
-            if link in self.title_to_text and link not in self.link_expansion_count
+            if self._article_exists(link) and link not in self.link_expansion_count
         ]
         return set(links)
 
@@ -160,8 +189,7 @@ class DatasetBuilder:
 
     def _save_link_expansion_count(self) -> None:
         """Save the link expansion count to disk."""
-        with open(self.link_expansion_path, "w", encoding="utf-8") as f:
-            json.dump(dict(self.link_expansion_count), f, ensure_ascii=False, indent=2)
+        self._dump(dict(self.link_expansion_count), self.link_expansion_path)
 
     def _read_processed_data(self, processed_dir: Path) -> None:
         """Folder as: data/processed/2025-08-12-13-08-36."""
@@ -170,30 +198,30 @@ class DatasetBuilder:
             processed_dir = self._extract_latest_processed_dir(processed_dir)
 
         title_to_links_path = processed_dir / FILE_NAMES["title_to_links"]
-        title_to_text_path = processed_dir / FILE_NAMES["title_to_text"]
         link_to_freq_path = processed_dir / FILE_NAMES["link_to_freq"]
-        title_to_tokens_path = processed_dir / FILE_NAMES["title_to_tokens"]
-        with open(title_to_links_path, "r") as f:
-            self.title_to_links = json.load(f)
-        with open(title_to_text_path, "r") as f:
-            self.title_to_text = json.load(f)
-        with open(link_to_freq_path, "r") as f:
-            self.link_to_freq = json.load(f)
-        with open(title_to_tokens_path, "r") as f:
-            self.title_to_tokens = json.load(f)
+        title_to_num_tokens_path = processed_dir / FILE_NAMES["title_to_num_tokens"]
+        articles_db_path = processed_dir / FILE_NAMES["articles_db"]
 
-        for title, tokens in self.title_to_tokens.items():
-            self.title_to_num_tokens[title] = len(tokens)
+        self.title_to_links = self._load_json(title_to_links_path)
+
+        if not articles_db_path.exists():
+            msg = f"articles_db not found at: {articles_db_path}"
+            raise FileNotFoundError(msg)
+
+        self._articles_db_conn = sqlite3.connect(articles_db_path)
+
+        self.link_to_freq = Counter(self._load_json(link_to_freq_path))
+        self.title_to_num_tokens = self._load_json(title_to_num_tokens_path)
 
     def _extract_latest_processed_dir(self, processed_dir: Path) -> Path:
         """Extract the latest folder with required dictionaries."""
         subdirs = [d for d in processed_dir.iterdir() if d.is_dir()]
         if len(subdirs) == 0:
-            raise ValueError("No processed data found")
-        elif len(subdirs) == 1:
+            msg = "No processed data found"
+            raise ValueError(msg)
+        if len(subdirs) == 1:
             return subdirs[0]
-        else:
-            return max(subdirs, key=lambda d: d.name)
+        return max(subdirs, key=lambda d: d.name)
 
     def _expand(self, text: str, title: str) -> dict[str, Any]:
         """Expand the text of a Wikipedia article.
@@ -221,8 +249,11 @@ class DatasetBuilder:
                 break
             link = links.pop()
 
+            if not self._article_exists(link):
+                continue
+
             n_links_expanded += 1
-            link_article = self.title_to_text[link]
+            link_article = self._get_article_text(link)
             links_expanded.append(link)
             current_tokens += self.title_to_num_tokens[link]
             text = self._include_link_text(link_article=link_article, text=text)
@@ -237,34 +268,47 @@ class DatasetBuilder:
         return sample
 
     def _include_link_text(self, link_article: str, text: str) -> str:
-        """Include the link text in the text.
-
-        Args:
-            link_article: The text of the link article.
-            text: The text of the Wikipedia article.
-
-        Returns:
-            The text of the Wikipedia article with the link text included.
-        """
+        """Include the link text in the text."""
         if self.include_strategy == "append":
             text = f"{text}\n\n{link_article}"
         elif self.include_strategy == "prepend":
             text = f"{link_article}\n\n{text}"
         else:
-            raise ValueError(f"Invalid include strategy: {self.include_strategy}")
+            msg = f"Invalid include strategy: {self.include_strategy}"
+            raise ValueError(msg)
         return text
 
+    def _article_exists(self, title: str) -> bool:
+        """Return True if we have text available for the given article."""
+        if self._articles_db_conn is None:
+            msg = "articles_db connection is not initialised."
+            raise RuntimeError(msg)
+
+        cursor = self._articles_db_conn.execute(
+            "SELECT 1 FROM articles WHERE title = ? LIMIT 1", (title,)
+        )
+        return cursor.fetchone() is not None
+
+    def _get_article_text(self, title: str) -> str:
+        """Fetch article text from SQLite or the in-memory dict."""
+        if self._articles_db_conn is None:
+            msg = "articles_db connection is not initialised."
+            raise RuntimeError(msg)
+
+        cursor = self._articles_db_conn.execute(
+            "SELECT text FROM articles WHERE title = ?", (title,)
+        )
+        row = cursor.fetchone()
+        if row is None:
+            msg = f"Missing article text for title: {title}"
+            raise KeyError(msg)
+        (text,) = row
+        return str(text)
+
     def _get_links(self, title: str) -> list[str]:
-        """Get the links present in the article.
-
-        Args:
-            title: The title of the Wikipedia article.
-
-        Returns:
-            A list of links present in the article.
-        """
+        """Get the links present in the article."""
         links: list[str] = list(set(self.title_to_links[title]))
-        links = [link for link in links if link in self.title_to_text]
+        links = [link for link in links if self._article_exists(link)]
 
         if self.max_link_expansions_global:
             links = [
@@ -322,17 +366,28 @@ class DatasetBuilder:
         return links
 
     def _log_iteration_stats(self, iteration: int) -> None:
+        """Log the iteration stats."""
         logger.info(
-            f"Total number of unique expanded links "
-            f"(iteration {iteration}): "
+            f"Total number of unique expanded links (iteration {iteration}): "
             f"{len(self.link_expansion_count)}"
         )
         logger.info(
-            f"Total number of links expanded "
-            f"(iteration {iteration}): "
+            f"Total number of links expanded (iteration {iteration}): "
             f"{sum(self.link_expansion_count.values())}"
         )
         logger.info(
-            f"Total number of links considered for expansion: "
+            "Total number of links considered for expansion: "
             f"{len(self.all_links_considered_for_expansion)}"
         )
+
+    @staticmethod
+    def _dump(data: dict, path: Path) -> None:
+        """Dump a Python object to a JSON file."""
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+    @staticmethod
+    def _load_json(path: Path) -> dict:
+        """Load a JSON file and return the decoded Python object."""
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)

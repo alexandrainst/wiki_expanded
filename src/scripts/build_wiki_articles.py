@@ -20,7 +20,7 @@ from wiki_expanded.wiki_articles import WikiArticlesBuilder
     required=True,
     help=(
         "Path to a processed run folder containing "
-        "title_to_text.json and title_to_url.json."
+        "articles.sqlite3 and title_to_url.json."
     ),
 )
 @click.option(

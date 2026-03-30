@@ -57,7 +57,7 @@ bzip2 -d "./${LANG}wiki-latest-pages-articles.xml.bz2"
 ```bash
 # Parse Wikipedia XML and load into MongoDB (ensure MongoDB is running)
 dumpster "./${LANG}wiki-latest-pages-articles.xml" \
-  --infoboxes=false --citations=false --categories=false --images=false --links=true --plaintext=true
+  --infoboxes=false --citations=false --categories=false --images=false --links=true --plaintext=true --db_url "mongodb://127.0.0.1:27017" --db "${LANG}wiki"
 ```
 
 > **Note:** This step requires MongoDB to be running. Start it with the command from step 1.
@@ -72,7 +72,7 @@ mongoexport --db="${LANG}wiki" --collection=pages --out="${LANG}wiki_pages.jsonl
 Build six JSON files that will be used to construct the expanded Wikipedia dataset.
 
 ```bash
-python src/scripts/process.py --jsonl-file="dawiki_pages.jsonl"
+python src/scripts/process.py --jsonl-file="${LANG}wiki_pages.jsonl"
 ```
 
 ### 4️⃣ Build the expanded Wikipedia dataset
