@@ -69,7 +69,7 @@ mongoexport --db="${LANG}wiki" --collection=pages --out="${LANG}wiki_pages.jsonl
 ```
 
 ### 3️⃣ Process the extracted data
-Build five JSON files that will be used to construct the expanded Wikipedia dataset.
+Build six JSON files that will be used to construct the expanded Wikipedia dataset.
 
 ```bash
 python src/scripts/process.py --jsonl-file="dawiki_pages.jsonl"
@@ -80,6 +80,14 @@ Build the expanded Wikipedia dataset by expanding links in the articles.
 
 ```bash
 python src/scripts/build_dataset.py --include-strategy=prepend --max-link-expansions=10 --num-tokens-threshold=15000
+```
+
+### 5️⃣ Build a simple URL-title-text dataset
+Build a JSONL dataset with columns: `url`, `title`, `text` from one exact processed run
+folder (for example `data/processed/da/2026-03-27-13-16-29`).
+
+```bash
+python src/scripts/build_wiki_articles.py --processed-dir="data/processed/da/2026-03-27-13-16-29" --output-file="dataset.jsonl"
 ```
 
 ______________________________________________________________________

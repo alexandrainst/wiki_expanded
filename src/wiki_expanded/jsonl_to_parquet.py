@@ -1,4 +1,9 @@
-"""Convert JSONL files to Parquet format with automatic ID generation."""
+"""Convert JSONL files to Parquet format with automatic ID generation.
+
+Usage:
+
+>>> python src/wiki_expanded/jsonl_to_parquet.py data/processed/dataset.jsonl
+"""
 
 import json
 from pathlib import Path
