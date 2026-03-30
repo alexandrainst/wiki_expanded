@@ -82,12 +82,17 @@ Build the expanded Wikipedia dataset by expanding links in the articles.
 python src/scripts/build_dataset.py --include-strategy=prepend --max-link-expansions=10 --num-tokens-threshold=15000
 ```
 
-### 5️⃣ Build a simple URL-title-text dataset
-Build a JSONL dataset with columns: `url`, `title`, `text` from one exact processed run
-folder (for example `data/processed/da/2026-03-27-13-16-29`).
+### 5️⃣ Build a non-expanded Wikipedia dataset
+Build a JSONL dataset with one row per Wikipedia article. Each row contains:
+- `url`: Stable Wikipedia URL for the article
+- `title`: Article title
+- `text`: Article text (not expanded with linked articles)
+
+This is independent of step 4 (the expanded dataset) -- both consume the
+output of step 3.
 
 ```bash
-python src/scripts/build_wiki_articles.py --processed-dir="data/processed/da/2026-03-27-13-16-29" --output-file="dataset.jsonl"
+python src/scripts/build_wiki_articles.py --processed-dir="data/processed/da/2026-03-27-13-16-29" --output-file="wiki_articles.jsonl"
 ```
 
 ______________________________________________________________________
